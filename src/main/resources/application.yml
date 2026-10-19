@@ -28,3 +28,8 @@ management:
 
 server:
   shutdown: graceful
+
+app:
+  jwt:
+    secret: ${JWT_SECRET}        # no default on purpose: the app must not start without it
+    access-token-minutes: 15
