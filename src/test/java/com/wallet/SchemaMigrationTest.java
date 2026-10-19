@@ -6,13 +6,8 @@ import com.wallet.user.User;
 import com.wallet.user.UserRepository;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.testcontainers.containers.PostgreSQLContainer;
-import org.testcontainers.junit.jupiter.Container;
-import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.util.List;
 import java.util.UUID;
@@ -24,13 +19,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * Runs against a real Postgres (Testcontainers). Booting the context proves three things at once:
  * Flyway applies V1, Hibernate's ddl-auto=validate accepts the entity mapping, and the app starts.
  */
-@SpringBootTest
-@Testcontainers
-class SchemaMigrationTest {
-
-    @Container
-    @ServiceConnection
-    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:16-alpine");
+class SchemaMigrationTest extends AbstractIntegrationTest {
 
     @Autowired
     JdbcTemplate jdbc;
