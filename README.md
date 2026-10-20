@@ -31,7 +31,21 @@ On other platforms, install any JDK 21 distribution and point `JAVA_HOME` at it.
 docker compose up --build
 
 # Health check
-curl http://localhost:8080/actuator/health
+# Health check (compose maps the app to host port 8081)
+curl http://localhost:8081/actuator/health
+```
+Try the API (the compose file supplies a throwaway dev `JWT_SECRET`):
+
+```bash
+curl -X POST http://localhost:8081/auth/register -H "Content-Type: application/json" \
+  -d '{"email":"alice@example.com","password":"password123"}'
+
+TOKEN=$(curl -s -X POST http://localhost:8081/auth/login -H "Content-Type: application/json" \
+  -d '{"email":"alice@example.com","password":"password123"}' | sed -E 's/.*"accessToken":"([^"]+)".*/\1/')
+
+curl -X POST http://localhost:8081/accounts -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" -d '{"currency":"SGD"}'
+curl http://localhost:8081/accounts -H "Authorization: Bearer $TOKEN"
 ```
 
 Run the tests (needs a running Docker daemon, because Testcontainers starts a real Postgres):
@@ -60,5 +74,5 @@ They are a reproducible baseline for this project, not production capacity figur
 
 | Work package | State |
 |---|---|
-| WP 1 Foundation | Local build and tests pass; first CI run not yet confirmed |
-| WP 2 Auth and accounts | Not started |
+| WP 1 Foundation | Done. Build, tests and CI green |
+| WP 2 Auth and accounts | Done. Register, login (JWT), account endpoints with ownership checks, 17 tests, CI green |
