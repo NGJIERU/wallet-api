@@ -62,6 +62,26 @@ public class Account {
         return balance;
     }
 
+    // Callers must hold the row lock (AccountRepository.lockAllByIdOrdered) before calling these.
+    public void credit(long amount) {
+        requirePositive(amount);
+        this.balance = Math.addExact(this.balance, amount);
+    }
+
+    public void debit(long amount) {
+        requirePositive(amount);
+        if (amount > balance) {
+            throw new InsufficientFundsException();
+        }
+        this.balance -= amount;
+    }
+
+    private static void requirePositive(long amount) {
+        if (amount <= 0) {
+            throw new IllegalArgumentException("amount must be positive");
+        }
+    }
+
     public Instant getCreatedAt() {
         return createdAt;
     }
