@@ -5,6 +5,12 @@ import com.wallet.auth.InvalidCredentialsException;
 import com.wallet.account.AccountNotFoundException;
 import com.wallet.account.DuplicateAccountException;
 import com.wallet.account.InvalidCurrencyException;
+import com.wallet.account.InsufficientFundsException;
+import com.wallet.common.PgErrors;
+import com.wallet.idempotency.IdempotencyConflictException;
+import com.wallet.idempotency.IdempotencyKeyReuseException;
+import com.wallet.idempotency.InvalidIdempotencyKeyException;
+import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -37,5 +43,35 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
     @ExceptionHandler(InvalidCurrencyException.class)
     ProblemDetail handleInvalidCurrency(InvalidCurrencyException e) {
         return ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, e.getMessage());
+    }
+
+    @ExceptionHandler(InvalidIdempotencyKeyException.class)
+    ProblemDetail handleInvalidIdempotencyKey(InvalidIdempotencyKeyException e) {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, e.getMessage());
+    }
+
+    @ExceptionHandler(IdempotencyKeyReuseException.class)
+    ProblemDetail handleIdempotencyKeyReuse(IdempotencyKeyReuseException e) {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.UNPROCESSABLE_ENTITY, e.getMessage());
+    }
+
+    @ExceptionHandler(IdempotencyConflictException.class)
+    ProblemDetail handleIdempotencyConflict(IdempotencyConflictException e) {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, e.getMessage());
+    }
+
+    @ExceptionHandler(InsufficientFundsException.class)
+    ProblemDetail handleInsufficientFunds(InsufficientFundsException e) {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.UNPROCESSABLE_ENTITY, e.getMessage());
+    }
+
+    // A lock timeout on the account row (SQLSTATE 55P03) means "busy, retry". Anything else in this
+    // family (a deadlock, say) is not a client conflict. Retrying deadlocks comes in step 3.4.
+    @ExceptionHandler(PessimisticLockingFailureException.class)
+    ProblemDetail handleLockFailure(PessimisticLockingFailureException e) {
+        if (PgErrors.isLockTimeout(e)) {
+            return ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, "The account is busy, retry the request");
+        }
+        return ProblemDetail.forStatusAndDetail(HttpStatus.INTERNAL_SERVER_ERROR, "The request could not be completed");
     }
 }

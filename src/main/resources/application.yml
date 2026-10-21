@@ -1,6 +1,9 @@
 spring:
   application:
     name: wallet-api
+  jackson:
+    deserialization:
+      accept-float-as-int: false  # 1.5 must be rejected, not silently truncated to 1
   datasource:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/wallet}
     username: ${DB_USER:wallet}
