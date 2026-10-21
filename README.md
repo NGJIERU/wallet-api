@@ -30,10 +30,10 @@ On other platforms, install any JDK 21 distribution and point `JAVA_HOME` at it.
 # Start Postgres + the app
 docker compose up --build
 
-# Health check
 # Health check (compose maps the app to host port 8081)
 curl http://localhost:8081/actuator/health
 ```
+
 Try the API (the compose file supplies a throwaway dev `JWT_SECRET`):
 
 ```bash
@@ -47,6 +47,28 @@ curl -X POST http://localhost:8081/accounts -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" -d '{"currency":"SGD"}'
 curl http://localhost:8081/accounts -H "Authorization: Bearer $TOKEN"
 ```
+
+Move money. Every POST needs an `Idempotency-Key` header (1 to 64 printable ASCII characters, no spaces).
+Amounts are in minor units (2500 = 25.00). Replace the account ids with your own; a transfer needs
+two accounts in the same currency.
+
+```bash
+curl -X POST http://localhost:8081/accounts/1/deposits -H "Authorization: Bearer $TOKEN" \
+  -H "Idempotency-Key: demo-1" -H "Content-Type: application/json" -d '{"amount":2500}'
+
+curl -X POST http://localhost:8081/accounts/1/withdrawals -H "Authorization: Bearer $TOKEN" \
+  -H "Idempotency-Key: demo-2" -H "Content-Type: application/json" -d '{"amount":500}'
+
+curl -X POST http://localhost:8081/transfers -H "Authorization: Bearer $TOKEN" \
+  -H "Idempotency-Key: demo-3" -H "Content-Type: application/json" \
+  -d '{"fromAccountId":1,"toAccountId":2,"amount":1000}'
+
+# History is newest first. Pass the returned cursor to get the next page.
+curl "http://localhost:8081/accounts/1/transactions?limit=20" -H "Authorization: Bearer $TOKEN"
+```
+
+Sending the same request again with the same `Idempotency-Key` returns the stored response and moves no money.
+The same key with a different body returns 422.
 
 Run the tests (needs a running Docker daemon, because Testcontainers starts a real Postgres):
 
@@ -76,3 +98,4 @@ They are a reproducible baseline for this project, not production capacity figur
 |---|---|
 | WP 1 Foundation | Done. Build, tests and CI green |
 | WP 2 Auth and accounts | Done. Register, login (JWT), account endpoints with ownership checks, 17 tests, CI green |
+| WP 3 Money movement | Done (M2). Idempotent deposit, withdrawal and transfer, cursor-paginated history, and a ledger reconciliation check after every integration test. 92 tests, 0 failures with `mvn verify`. CI run: _record after push_ |

@@ -26,10 +26,20 @@ class LedgerPersistenceTest extends AbstractIntegrationTest {
         Account from = accounts.saveAndFlush(new Account(alice.getId(), "SGD"));
         Account to = accounts.saveAndFlush(new Account(bob.getId(), "SGD"));
 
+        // fund the sender first so the balances and the ledger stay consistent (reconciliation runs after every test)
+        Transaction funding = transactions.saveAndFlush(
+                new Transaction(TransactionType.DEPOSIT, "SGD", 2_500, alice.getId()));
+        ledger.saveAndFlush(new LedgerEntry(funding.getId(), from.getId(), Direction.CREDIT, 2_500));
+        from.credit(2_500);
+
         Transaction txn = transactions.saveAndFlush(
                 new Transaction(TransactionType.TRANSFER, "SGD", 2_500, alice.getId()));
         LedgerEntry debit = ledger.saveAndFlush(new LedgerEntry(txn.getId(), from.getId(), Direction.DEBIT, 2_500));
         LedgerEntry credit = ledger.saveAndFlush(new LedgerEntry(txn.getId(), to.getId(), Direction.CREDIT, 2_500));
+        from.debit(2_500);
+        to.credit(2_500);
+        accounts.saveAndFlush(from);
+        accounts.saveAndFlush(to);
 
         assertThat(txn.getId()).isNotNull();
 
