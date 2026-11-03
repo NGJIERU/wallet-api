@@ -76,6 +76,49 @@ Run the tests (needs a running Docker daemon, because Testcontainers starts a re
 mvn verify
 ```
 
+Run only the concurrency tests (tagged `concurrency`, see the next section):
+
+```bash
+mvn test -Dgroups=concurrency
+```
+
+## Concurrency proof (WP 4)
+
+Production-style patterns, proven under real parallel load against a real PostgreSQL 16 (Testcontainers). The tests call the services directly (no HTTP), with up to 50 threads started together on a latch.
+
+### What is tested
+
+| Scenario | Result |
+|---|---|
+| Random transfers: 8 accounts x 10,000, 16 threads x 25 transfers | 400 of 400 succeed, total balance stays 80,000, ledger rows = 8 + 2 x 400, no negative balance |
+| Hot account: 50 withdrawals of 100 on a balance of 1,000 | exactly 10 succeed, 40 refused (insufficient funds), final balance 0 |
+| Hot account: 25 deposits and 25 withdrawals on one account, shuffled | every deposit succeeds, balance equals the exact sum of successful operations, never negative |
+| One source to 20 destinations | all 20 succeed, money conserved |
+| Same idempotency key, same body, 20 threads | 20 identical 201 responses, 1 transaction, 2 ledger entries, debited once |
+| Same key, 20 different amounts | exactly 1 succeeds, 19 rejected as key reuse, only the winner's amount debited |
+| Same key, first attempt fails (insufficient funds) | all 20 refused, no key stored, nothing changed |
+| Real deadlock (forced, opposite lock order) | Postgres kills one transaction (40P01), the retry wrapper re-runs it once, both transfers applied exactly once |
+
+Every test also asserts conservation (total balance) and exact row counts. The reconciliation check (SUM(CREDIT) - SUM(DEBIT) = balance) runs after every integration test, but it cannot catch a double-applied transfer, so it is never the only check.
+
+### How it is checked
+
+- Outcomes are classified by exception type (`OK`, `INSUFFICIENT`, `KEY_REUSE`, `BUSY`, `UNEXPECTED`). Any `UNEXPECTED` outcome fails the test.
+- No sleeps are used for synchronization. A hang fails after 60 s instead of freezing the build.
+- Random plans use a seeded `Random` and the seed is logged, so a failing run can be replayed.
+- The concurrency tests share one Spring context (lock timeout 30 s, connection pool 50) and a Postgres container with `max_connections=200`.
+
+### Results
+
+Needs JDK 21 and Docker. Measured locally (Apple M2 Pro, JDK 21.0.12.1): the 13 concurrency tests took 9.4 to 11.3 s per run, 10 of 10 runs green. CI (GitHub Actions, ubuntu-24.04): the full suite of 105 tests is green in about 1 minute (run #21, 1m17s in total).
+
+### Limitations
+
+- Deposits and withdrawals have no deadlock retry. A deadlock there is unreachable by design (claim first, one row lock). Add a retry if a second lock is ever added.
+- A busy account returns 409 after the lock timeout (2 s by default). Clients must retry.
+- Tests run in one JVM against one database. They do not cover multiple app instances or HTTP-level load (that is WP 8).
+- The tests prove exact outcomes. They do not measure how long threads waited on row locks.
+
 ## Benchmark environment
 
 Benchmark numbers are published in WP 8. They are only meaningful with the environment beside them,
@@ -99,3 +142,4 @@ They are a reproducible baseline for this project, not production capacity figur
 | WP 1 Foundation | Done. Build, tests and CI green |
 | WP 2 Auth and accounts | Done. Register, login (JWT), account endpoints with ownership checks, 17 tests, CI green |
 | WP 3 Money movement | Done (M2). Idempotent deposit, withdrawal and transfer, cursor-paginated history, and a ledger reconciliation check after every integration test. 92 tests, 0 failures with `mvn verify`. CI run: #18 green, 57s |
+| WP 4 Concurrency proof | Done (M3 gate: GO). Random transfers, hot account, idempotency-key races and a retry on a real deadlock, 13 tests tagged `concurrency`, no production code changed. 105 tests, 0 failures with `mvn verify`. CI run: #21 green, 1m17s |
