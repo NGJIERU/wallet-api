@@ -116,7 +116,7 @@ class KeyRaceTest extends ConcurrencyTestBase {
     private Set<UUID> distinctTransactionIds(List<StoredResponse> responses) throws Exception {
         Set<UUID> ids = new LinkedHashSet<>();
         for (StoredResponse s : responses) {
-            ids.add(UUID.fromString(mapper.readTree(s.body()).get("id").asText()));
+            ids.add(UUID.fromString(mapper.readTree(s.body()).get("id").asString()));
         }
         return ids;
     }

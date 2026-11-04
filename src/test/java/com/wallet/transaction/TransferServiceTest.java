@@ -50,7 +50,7 @@ class TransferServiceTest extends AbstractIntegrationTest {
 
         assertThat(r.code()).isEqualTo(201);
         JsonNode body = mapper.readTree(r.body());
-        assertThat(body.get("type").asText()).isEqualTo("TRANSFER");
+        assertThat(body.get("type").asString()).isEqualTo("TRANSFER");
         assertThat(body.get("amount").asLong()).isEqualTo(400);
         assertThat(body.get("fromAccountId").asLong()).isEqualTo(alice.accountId());
         assertThat(body.get("toAccountId").asLong()).isEqualTo(bob.accountId());
@@ -58,7 +58,7 @@ class TransferServiceTest extends AbstractIntegrationTest {
         assertThat(balance(alice)).isEqualTo(600);
         assertThat(balance(bob)).isEqualTo(400);
 
-        UUID txnId = UUID.fromString(body.get("id").asText());
+        UUID txnId = UUID.fromString(body.get("id").asString());
         assertThat(entriesFor(txnId)).isEqualTo(2);
         assertReconciled(jdbc, alice.accountId(), bob.accountId());
     }

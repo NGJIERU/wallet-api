@@ -84,13 +84,13 @@ class TransactionHistoryApiIntegrationTest extends AbstractIntegrationTest {
         transfer(alice, from, to, 400);
 
         JsonNode sent = history(alice, from, "limit=20").get("items").get(0);
-        assertThat(sent.get("type").asText()).isEqualTo("TRANSFER");
-        assertThat(sent.get("direction").asText()).isEqualTo("DEBIT");
+        assertThat(sent.get("type").asString()).isEqualTo("TRANSFER");
+        assertThat(sent.get("direction").asString()).isEqualTo("DEBIT");
         assertThat(sent.get("amount").asLong()).isEqualTo(400);
 
         JsonNode received = history(bob, to, "limit=20");
         assertThat(received.get("items")).hasSize(1);
-        assertThat(received.get("items").get(0).get("direction").asText()).isEqualTo("CREDIT");
+        assertThat(received.get("items").get(0).get("direction").asString()).isEqualTo("CREDIT");
 
         assertReconciled(jdbc, from, to);
     }
@@ -194,7 +194,7 @@ class TransactionHistoryApiIntegrationTest extends AbstractIntegrationTest {
                         .content("{\"fromAccountId\":" + from + ",\"toAccountId\":" + to + ",\"amount\":" + amount + "}"))
                 .andExpect(status().isCreated())
                 .andReturn().getResponse().getContentAsString();
-        return mapper.readTree(body).get("id").asText();
+        return mapper.readTree(body).get("id").asString();
     }
 
     private long createAccount(String token) throws Exception {
@@ -214,6 +214,6 @@ class TransactionHistoryApiIntegrationTest extends AbstractIntegrationTest {
         String response = mvc.perform(MockMvcRequestBuilders.post("/auth/login").contentType(APPLICATION_JSON).content(body))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
-        return mapper.readTree(response).get("accessToken").asText();
+        return mapper.readTree(response).get("accessToken").asString();
     }
 }

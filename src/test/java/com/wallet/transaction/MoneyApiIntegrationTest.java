@@ -70,7 +70,7 @@ class MoneyApiIntegrationTest extends AbstractIntegrationTest {
         deposit(token, accountId, key(), "{\"amount\":100}").andExpect(status().isCreated());
 
         withdraw(token, accountId, key(), "{\"amount\":101}")
-                .andExpect(status().isUnprocessableEntity())
+                .andExpect(status().isUnprocessableContent())
                 .andExpect(jsonPath("$.detail").value("Insufficient funds"));
 
         assertBalance(token, accountId, 100);
@@ -101,7 +101,7 @@ class MoneyApiIntegrationTest extends AbstractIntegrationTest {
         deposit(token, accountId, k, "{\"amount\":500}").andExpect(status().isCreated());
 
         deposit(token, accountId, k, "{\"amount\":600}")
-                .andExpect(status().isUnprocessableEntity())
+                .andExpect(status().isUnprocessableContent())
                 .andExpect(jsonPath("$.detail").value(containsString("Idempotency-Key")));
 
         assertBalance(token, accountId, 500);
@@ -229,7 +229,7 @@ class MoneyApiIntegrationTest extends AbstractIntegrationTest {
         String response = mvc.perform(MockMvcRequestBuilders.post("/auth/login").contentType(APPLICATION_JSON).content(body))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
-        return mapper.readTree(response).get("accessToken").asText();
+        return mapper.readTree(response).get("accessToken").asString();
     }
 
     private static String key() {
