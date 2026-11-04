@@ -1,6 +1,6 @@
 package com.wallet.transaction;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.wallet.AbstractIntegrationTest;
 import com.wallet.account.AccountRepository;
 import org.junit.jupiter.api.Test;

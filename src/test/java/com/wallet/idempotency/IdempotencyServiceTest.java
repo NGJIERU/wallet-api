@@ -1,6 +1,6 @@
 package com.wallet.idempotency;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.wallet.AbstractIntegrationTest;
 import com.wallet.user.User;
 import com.wallet.user.UserRepository;
