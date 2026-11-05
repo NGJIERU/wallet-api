@@ -14,6 +14,7 @@ Limitations, Hardening before production) is written in WP 9.
 | Maven | 3.9 | Same major version the Dockerfile uses |
 | Docker | Docker Desktop, engine 28.x | Runs the stack and the Testcontainers tests |
 | Spring Boot | 4.1.x (built and tested on 4.1.2) | Managed by the parent POM |
+
 Java 21 setup on macOS:
 
 ```bash
@@ -144,4 +145,4 @@ They are a reproducible baseline for this project, not production capacity figur
 | WP 2 Auth and accounts | Done. Register, login (JWT), account endpoints with ownership checks, 17 tests, CI green |
 | WP 3 Money movement | Done (M2). Idempotent deposit, withdrawal and transfer, cursor-paginated history, and a ledger reconciliation check after every integration test. 92 tests, 0 failures with `mvn verify`. CI run: #18 green, 57s |
 | WP 4 Concurrency proof | Done (M3 gate: GO). Random transfers, hot account, idempotency-key races and a retry on a real deadlock, 13 tests tagged `concurrency`, no production code changed. 105 tests, 0 failures with `mvn verify`. CI run: #21 green, 1m17s |
-| WP 5 step 5.0 Boot 4.1.2 migration | Done. Same behaviour and the same 105 tests, 0 failures with mvn verify. CI run: #23 1m1s |
+| WP 5 step 5.0 Boot 4.1.2 migration | Done. Same behaviour and the same 105 tests, 0 failures with mvn verify. CI run: #23 green, 1m6s |
