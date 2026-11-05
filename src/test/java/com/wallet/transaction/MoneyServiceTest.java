@@ -1,7 +1,7 @@
 package com.wallet.transaction;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 import com.wallet.AbstractIntegrationTest;
 import com.wallet.account.Account;
 import com.wallet.account.AccountNotFoundException;
@@ -40,7 +40,7 @@ class MoneyServiceTest extends AbstractIntegrationTest {
 
         assertThat(r.code()).isEqualTo(201);
         JsonNode body = mapper.readTree(r.body());
-        assertThat(body.get("type").asText()).isEqualTo("DEPOSIT");
+        assertThat(body.get("type").asString()).isEqualTo("DEPOSIT");
         assertThat(body.get("amount").asLong()).isEqualTo(1_000);
         assertThat(body.get("balanceAfter").asLong()).isEqualTo(1_000);
         assertThat(balance(f.accountId())).isEqualTo(1_000);

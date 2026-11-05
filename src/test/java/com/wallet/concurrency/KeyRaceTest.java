@@ -1,7 +1,7 @@
 package com.wallet.concurrency;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 import com.wallet.idempotency.StoredResponse;
 import com.wallet.transaction.TransferService;
 import org.junit.jupiter.api.Test;
@@ -116,7 +116,7 @@ class KeyRaceTest extends ConcurrencyTestBase {
     private Set<UUID> distinctTransactionIds(List<StoredResponse> responses) throws Exception {
         Set<UUID> ids = new LinkedHashSet<>();
         for (StoredResponse s : responses) {
-            ids.add(UUID.fromString(mapper.readTree(s.body()).get("id").asText()));
+            ids.add(UUID.fromString(mapper.readTree(s.body()).get("id").asString()));
         }
         return ids;
     }

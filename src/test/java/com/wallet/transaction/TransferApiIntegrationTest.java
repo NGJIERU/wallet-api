@@ -1,6 +1,6 @@
 package com.wallet.transaction;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.wallet.AbstractIntegrationTest;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -53,7 +53,7 @@ class TransferApiIntegrationTest extends AbstractIntegrationTest {
         fund(alice, from, 100);
 
         transfer(alice, key(), from, to, 101)
-                .andExpect(status().isUnprocessableEntity())
+                .andExpect(status().isUnprocessableContent())
                 .andExpect(jsonPath("$.detail").value("Insufficient funds"));
 
         assertBalance(alice, from, 100);
@@ -90,7 +90,7 @@ class TransferApiIntegrationTest extends AbstractIntegrationTest {
         transfer(alice, k, from, to, 300).andExpect(status().isCreated());
 
         transfer(alice, k, from, to, 301)
-                .andExpect(status().isUnprocessableEntity())
+                .andExpect(status().isUnprocessableContent())
                 .andExpect(jsonPath("$.detail").value(containsString("Idempotency-Key")));
 
         assertBalance(alice, from, 700);
@@ -230,7 +230,7 @@ class TransferApiIntegrationTest extends AbstractIntegrationTest {
         String response = mvc.perform(MockMvcRequestBuilders.post("/auth/login").contentType(APPLICATION_JSON).content(body))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
-        return mapper.readTree(response).get("accessToken").asText();
+        return mapper.readTree(response).get("accessToken").asString();
     }
 
     private static String key() {

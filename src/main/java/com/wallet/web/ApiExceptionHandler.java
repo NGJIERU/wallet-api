@@ -61,7 +61,7 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
 
     @ExceptionHandler(IdempotencyKeyReuseException.class)
     ProblemDetail handleIdempotencyKeyReuse(IdempotencyKeyReuseException e) {
-        return ProblemDetail.forStatusAndDetail(HttpStatus.UNPROCESSABLE_ENTITY, e.getMessage());
+        return ProblemDetail.forStatusAndDetail(HttpStatus.UNPROCESSABLE_CONTENT, e.getMessage());
     }
 
     @ExceptionHandler(IdempotencyConflictException.class)
@@ -71,7 +71,7 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
 
     @ExceptionHandler(InsufficientFundsException.class)
     ProblemDetail handleInsufficientFunds(InsufficientFundsException e) {
-        return ProblemDetail.forStatusAndDetail(HttpStatus.UNPROCESSABLE_ENTITY, e.getMessage());
+        return ProblemDetail.forStatusAndDetail(HttpStatus.UNPROCESSABLE_CONTENT, e.getMessage());
     }
 
     @ExceptionHandler(DestinationAccountNotFoundException.class)

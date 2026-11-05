@@ -1,6 +1,6 @@
 package com.wallet.transaction;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.wallet.AbstractIntegrationTest;
 import jakarta.persistence.EntityManagerFactory;
 import org.hibernate.SessionFactory;
@@ -79,6 +79,6 @@ class TransactionHistoryQueryCountTest extends AbstractIntegrationTest {
         String response = mvc.perform(MockMvcRequestBuilders.post("/auth/login").contentType(APPLICATION_JSON).content(body))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
-        return mapper.readTree(response).get("accessToken").asText();
+        return mapper.readTree(response).get("accessToken").asString();
     }
 }

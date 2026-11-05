@@ -1,7 +1,7 @@
 package com.wallet.transaction;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.ObjectMapper;
 import com.wallet.account.Account;
 import com.wallet.account.AccountNotFoundException;
 import com.wallet.account.AccountRepository;
@@ -81,7 +81,7 @@ public class MoneyService {
     private String toJson(TransactionResponse response) {
         try {
             return mapper.writeValueAsString(response);
-        } catch (JsonProcessingException e) {
+        } catch (JacksonException e) {
             throw new IllegalStateException("could not serialize the response", e);
         }
     }
