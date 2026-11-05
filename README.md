@@ -13,7 +13,7 @@ Limitations, Hardening before production) is written in WP 9.
 | Java | **21 exactly** | The Maven build fails fast on any other major version (maven-enforcer rule) |
 | Maven | 3.9 | Same major version the Dockerfile uses |
 | Docker | Docker Desktop, engine 28.x | Runs the stack and the Testcontainers tests |
-
+| Spring Boot | 4.1.x (built and tested on 4.1.2) | Managed by the parent POM |
 Java 21 setup on macOS:
 
 ```bash
@@ -110,7 +110,7 @@ Every test also asserts conservation (total balance) and exact row counts. The r
 
 ### Results
 
-Needs JDK 21 and Docker. Measured locally (Apple M2 Pro, JDK 21.0.12.1): the 13 concurrency tests took 9.4 to 11.3 s per run, 10 of 10 runs green. CI (GitHub Actions, ubuntu-24.04): the full suite of 105 tests is green in about 1 minute (run #21, 1m17s in total).
+Needs JDK 21 and Docker. Measured locally (Apple M2 Pro, JDK 21.0.12.1): the 13 concurrency tests took 9.4 to 11.3 s per run, 10 of 10 runs green on Spring Boot 3.4.1; 3 of 3 re-run after the move to 4.1.2. CI (GitHub Actions, ubuntu-24.04): the full suite of 105 tests is green in about 1 minute (run #21, 1m17s in total).
 
 ### Limitations
 
@@ -131,6 +131,7 @@ so the fields below are filled in at benchmark time, not guessed.
 | JDK (vendor and exact version) | _fill from `java -version` at benchmark time_ |
 | Docker engine | 28.4.0 (Docker Desktop) |
 | Docker Desktop VM memory | _fill at benchmark time (7.8 GB by default; raise before the Kafka work)_ |
+| Docker Desktop VM memory | 16 GB (raised on 4 Nov 2026 from the 7.8 GB default) |
 
 Docker on macOS runs inside a Linux VM, so these numbers are not equivalent to bare-metal Linux.
 They are a reproducible baseline for this project, not production capacity figures.
@@ -143,3 +144,4 @@ They are a reproducible baseline for this project, not production capacity figur
 | WP 2 Auth and accounts | Done. Register, login (JWT), account endpoints with ownership checks, 17 tests, CI green |
 | WP 3 Money movement | Done (M2). Idempotent deposit, withdrawal and transfer, cursor-paginated history, and a ledger reconciliation check after every integration test. 92 tests, 0 failures with `mvn verify`. CI run: #18 green, 57s |
 | WP 4 Concurrency proof | Done (M3 gate: GO). Random transfers, hot account, idempotency-key races and a retry on a real deadlock, 13 tests tagged `concurrency`, no production code changed. 105 tests, 0 failures with `mvn verify`. CI run: #21 green, 1m17s |
+| WP 5 step 5.0 Boot 4.1.2 migration | Done. Same behaviour and the same 105 tests, 0 failures with mvn verify. CI run: #23 1m1s |
