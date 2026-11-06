@@ -8,6 +8,7 @@ import com.wallet.account.AccountRepository;
 import com.wallet.account.DestinationAccountNotFoundException;
 import com.wallet.idempotency.IdempotencyService;
 import com.wallet.idempotency.StoredResponse;
+import com.wallet.outbox.OutboxWriter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -28,14 +29,16 @@ public class TransferTransaction {
     private final TransactionRepository transactions;
     private final LedgerEntryRepository ledger;
     private final IdempotencyService idempotency;
+    private final OutboxWriter outbox;
     private final ObjectMapper mapper;
 
     public TransferTransaction(AccountRepository accounts, TransactionRepository transactions,
-                               LedgerEntryRepository ledger, IdempotencyService idempotency, ObjectMapper mapper) {
+                               LedgerEntryRepository ledger, IdempotencyService idempotency, OutboxWriter outbox, ObjectMapper mapper) {
         this.accounts = accounts;
         this.transactions = transactions;
         this.ledger = ledger;
         this.idempotency = idempotency;
+        this.outbox = outbox;
         this.mapper = mapper;
     }
 
@@ -82,8 +85,10 @@ public class TransferTransaction {
 
         Transaction txn = transactions.saveAndFlush(
                 new Transaction(TransactionType.TRANSFER, from.getCurrency(), amount, userId));
-        ledger.save(new LedgerEntry(txn.getId(), fromId, Direction.DEBIT, amount));
-        ledger.save(new LedgerEntry(txn.getId(), toId, Direction.CREDIT, amount));
+        LedgerEntry debitEntry = ledger.save(new LedgerEntry(txn.getId(), fromId, Direction.DEBIT, amount));
+        outbox.write(from, txn, debitEntry);
+        LedgerEntry creditEntry = ledger.save(new LedgerEntry(txn.getId(), toId, Direction.CREDIT, amount));
+        outbox.write(to, txn, creditEntry);
 
         String body = toJson(new TransferResponse(
                 txn.getId(), TransactionType.TRANSFER, from.getCurrency(), amount,

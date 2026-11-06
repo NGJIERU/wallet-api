@@ -7,6 +7,7 @@ import com.wallet.account.AccountNotFoundException;
 import com.wallet.account.AccountRepository;
 import com.wallet.idempotency.IdempotencyService;
 import com.wallet.idempotency.StoredResponse;
+import com.wallet.outbox.OutboxWriter;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -20,14 +21,16 @@ public class MoneyService {
     private final TransactionRepository transactions;
     private final LedgerEntryRepository ledger;
     private final IdempotencyService idempotency;
+    private final OutboxWriter outbox;
     private final ObjectMapper mapper;
 
     public MoneyService(AccountRepository accounts, TransactionRepository transactions,
-                        LedgerEntryRepository ledger, IdempotencyService idempotency, ObjectMapper mapper) {
+                        LedgerEntryRepository ledger, IdempotencyService idempotency, OutboxWriter outbox, ObjectMapper mapper) {
         this.accounts = accounts;
         this.transactions = transactions;
         this.ledger = ledger;
         this.idempotency = idempotency;
+        this.outbox = outbox;
         this.mapper = mapper;
     }
 
@@ -70,7 +73,8 @@ public class MoneyService {
         }
 
         Transaction txn = transactions.saveAndFlush(new Transaction(type, account.getCurrency(), amount, userId));
-        ledger.save(new LedgerEntry(txn.getId(), accountId, direction, amount));
+        LedgerEntry entry = ledger.save(new LedgerEntry(txn.getId(), accountId, direction, amount));
+        outbox.write(account, txn, entry);
 
         String body = toJson(new TransactionResponse(
                 txn.getId(), type, account.getCurrency(), amount, accountId, account.getBalance(), txn.getCreatedAt()));
