@@ -23,6 +23,16 @@ spring:
     admin:
       operation-timeout: 5s   # a hung broker must not stall start-up for 40 s (measured 43 s with defaults)
       close-timeout: 2s
+    producer:
+      acks: all                      # an ack means the broker has the record; no loss on leader change
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      properties:
+        enable.idempotence: true     # a retry inside one producer session cannot duplicate
+        max.block.ms: 5000           # default 60 s would freeze the relay thread per call when the broker is down
+        request.timeout.ms: 5000
+        delivery.timeout.ms: 10000   # must be >= request.timeout.ms + linger.ms
+        linger.ms: 0
 
 management:
   endpoints:
@@ -38,6 +48,11 @@ server:
   shutdown: graceful
 
 app:
+  outbox:
+    topic: wallet.transaction-completed.v1
+    relay:
+      batch-size: 100
+      send-timeout-ms: 12000         # bounded wait per record, a little above delivery.timeout.ms
   jwt:
     secret: ${JWT_SECRET}        # no default on purpose: the app must not start without it
     access-token-minutes: 15
