@@ -13,6 +13,7 @@ Limitations, Hardening before production) is written in WP 9.
 | Java | **21 exactly** | The Maven build fails fast on any other major version (maven-enforcer rule) |
 | Maven | 3.9 | Same major version the Dockerfile uses |
 | Docker | Docker Desktop, engine 28.x | Runs the stack and the Testcontainers tests |
+| Kafka | `apache/kafka:4.2.2` (single-node KRaft) | Same tag in `docker-compose.yml` and the tests; matches the `kafka-clients` 4.2.2 managed by Boot 4.1.2. Multi-arch (arm64 and amd64) |
 | Spring Boot | 4.1.x (built and tested on 4.1.2) | Managed by the parent POM |
 
 Java 21 setup on macOS:
@@ -28,11 +29,15 @@ On other platforms, install any JDK 21 distribution and point `JAVA_HOME` at it.
 ## Quickstart
 
 ```bash
-# Start Postgres + the app
+# Start Postgres, Kafka and the app
 docker compose up --build
 
 # Health check (compose maps the app to host port 8081)
 curl http://localhost:8081/actuator/health
+
+# The events topic is declared by the app at start-up. Describe it from inside the broker
+# (expect PartitionCount 3, ReplicationFactor 1).
+docker compose exec kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --describe --topic wallet.transaction-completed.v1
 ```
 
 Try the API (the compose file supplies a throwaway dev `JWT_SECRET`):
@@ -111,7 +116,7 @@ Every test also asserts conservation (total balance) and exact row counts. The r
 
 ### Results
 
-Needs JDK 21 and Docker. Measured locally (Apple M2 Pro, JDK 21.0.12.1): the 13 concurrency tests took 9.4 to 11.3 s per run, 10 of 10 runs green on Spring Boot 3.4.1; 3 of 3 re-run after the move to 4.1.2. CI (GitHub Actions, ubuntu-24.04): the latest full suite (119 tests) is green in about 1 minute (run #27, 1m14s in total).
+Needs JDK 21 and Docker. Measured locally (Apple M2 Pro, JDK 21.0.12.1): on the Spring Boot 3.4.1 tree the 13 concurrency tests took 9.4 to 11.3 s per run, 10 of 10 runs green. On 4.1.2 the tag has 18 tests (13 + 5 outbox): 3 of 3 runs green after step 5.1 (Maven total 12.9 to 36.4 s) and 3 of 3 after step 5.2 (14.5 to 42.3 s). Times vary between runs for reasons not isolated, so they are not benchmarks. CI (GitHub Actions, ubuntu-24.04): the full suite (121 tests) is green in about 1m15s (run #30, 1m16s in total).
 
 ### Limitations
 
@@ -146,6 +151,7 @@ They are a reproducible baseline for this project, not production capacity figur
 | WP 4 Concurrency proof | Done (M3 gate: GO). Random transfers, hot account, idempotency-key races and a retry on a real deadlock, 13 tests tagged `concurrency`, no production code changed. 105 tests, 0 failures with `mvn verify`. CI run: #21 green, 1m17s |
 | WP 5 step 5.0 Boot 4.1.2 migration | Done. Same behaviour and the same 105 tests, 0 failures with mvn verify. CI run: #23 green, 1m6s |
 | WP 5 step 5.1 Outbox write path | Done. One outbox event per ledger entry, written inside the money transaction (an outbox failure rolls the money movement back). 119 tests, 0 failures with `mvn verify`; the `concurrency` tag now has 18 tests. CI run: #27 green, 1m14s |
+| WP 5 step 5.2 Kafka infrastructure | Done. Single-node KRaft broker (`apache/kafka:4.2.2`) in Compose, the app declares topic `wallet.transaction-completed.v1` (3 partitions, replication factor 1), shared Testcontainers broker for the tests. Kafka is not part of the health groups; with the broker stopped, health stays UP and deposits still succeed. 121 tests, 0 failures with `mvn verify`. CI run: #30 green, 1m16s |
 
 ## Outbox (WP 5, in progress)
 
@@ -157,3 +163,6 @@ Limitations (so far):
 - Delivery will be at-least-once, so consumers must dedupe.
 - One relay instance is planned. Several relays could break per-account order.
 - The deadlock-plus-retry outbox test forces its own deadlock, so it does not exercise the retry path of the real money services (that path is unreachable by design).
+- Kafka is a single broker with replication factor 1 and no data volume in Compose. Fix before production: a multi-broker cluster with replication factor 3 and `min.insync.replicas` 2.
+- The app declares its topic once, at start-up, and does not retry. If it starts while the broker is down, or the broker loses its data, the topic is missing until the next app restart (broker auto-creation is off on purpose).
+- With the broker down the app logs an ERROR from `KafkaAdmin` at start-up and carries on. With an unreachable broker address, start-up takes about 10 s instead of about 3 s (admin timeouts shortened from a measured 43 s).
