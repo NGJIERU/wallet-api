@@ -1,6 +1,7 @@
 package com.wallet.config;
 
 import org.apache.kafka.clients.admin.NewTopic;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.kafka.config.TopicBuilder;
@@ -15,7 +16,7 @@ public class KafkaTopicConfig {
     public static final String TRANSACTION_COMPLETED_TOPIC = "wallet.transaction-completed.v1";
 
     @Bean
-    NewTopic transactionCompletedTopic() {
-        return TopicBuilder.name(TRANSACTION_COMPLETED_TOPIC).partitions(3).replicas(1).build();
+    NewTopic transactionCompletedTopic(@Value("${app.outbox.topic:" + TRANSACTION_COMPLETED_TOPIC + "}") String topic) {
+        return TopicBuilder.name(topic).partitions(3).replicas(1).build();
     }
 }

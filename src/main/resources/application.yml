@@ -51,7 +51,11 @@ app:
   outbox:
     topic: wallet.transaction-completed.v1
     relay:
+      enabled: true                  # off in tests (AbstractIntegrationTest); on in the app
       batch-size: 100
+      poll-interval: 500ms           # wait when idle; a full batch runs again immediately
+      backoff-min: 1s                # after a failure: doubles up to backoff-max
+      backoff-max: 30s
       send-timeout-ms: 12000         # bounded wait per record, a little above delivery.timeout.ms
   jwt:
     secret: ${JWT_SECRET}        # no default on purpose: the app must not start without it

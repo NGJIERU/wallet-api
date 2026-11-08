@@ -8,7 +8,8 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.kafka.KafkaContainer;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
-@SpringBootTest(properties = "app.jwt.secret=test-secret-test-secret-test-secret-123456")
+@SpringBootTest(properties = {"app.jwt.secret=test-secret-test-secret-test-secret-123456",
+        "app.outbox.relay.enabled=false"})
 @AutoConfigureMockMvc
 @ExtendWith(ReconciliationExtension.class)
 public abstract class AbstractIntegrationTest {
