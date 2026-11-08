@@ -5,6 +5,7 @@ import org.apache.kafka.clients.producer.ProducerRecord;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.kafka.core.KafkaAdmin;
 import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.kafka.support.ProducerListener;
 import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
@@ -25,6 +26,10 @@ public class KafkaOutboxSender implements OutboxSender {
                              @Value("${app.outbox.relay.send-timeout-ms:12000}") long sendTimeoutMs,
                              KafkaAdmin kafkaAdmin, NewTopic topicDeclaration) {
         this.template = template;
+        // the default listener logs the failed record (payload with account ids and amounts) at ERROR;
+        // the relay already logs a WARN with counts and the cause, so silence the producer-side log
+        template.setProducerListener(new ProducerListener<>() {
+        });
         this.topic = topic;
         this.sendTimeoutMs = sendTimeoutMs;
         this.kafkaAdmin = kafkaAdmin;
