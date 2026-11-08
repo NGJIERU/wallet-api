@@ -38,7 +38,13 @@ curl http://localhost:8081/actuator/health
 # The events topic is declared by the app at start-up. Describe it from inside the broker
 # (expect PartitionCount 3, ReplicationFactor 1).
 docker compose exec kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --describe --topic wallet.transaction-completed.v1
+
+# Watch the published events (key = account id, headers event-id and event-type). Ctrl+C to stop.
+docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server kafka:29092 \
+  --topic wallet.transaction-completed.v1 --from-beginning --formatter-property print.key=true --formatter-property print.headers=true
 ```
+
+The outbox relay publishes unpublished rows in id order about every 500 ms. Properties: `app.outbox.relay.enabled` (true in the app, false in tests), `batch-size` (100), `poll-interval` (500ms), `backoff-min` (1s), `backoff-max` (30s), `send-timeout-ms` (12000) and `app.outbox.topic`.
 
 Try the API (the compose file supplies a throwaway dev `JWT_SECRET`):
 
@@ -151,6 +157,7 @@ They are a reproducible baseline for this project, not production capacity figur
 | WP 4 Concurrency proof | Done (M3 gate: GO). Random transfers, hot account, idempotency-key races and a retry on a real deadlock, 13 tests tagged `concurrency`, no production code changed. 105 tests, 0 failures with `mvn verify`. CI run: #21 green, 1m17s |
 | WP 5 step 5.0 Boot 4.1.2 migration | Done. Same behaviour and the same 105 tests, 0 failures with mvn verify. CI run: #23 green, 1m6s |
 | WP 5 step 5.1 Outbox write path | Done. One outbox event per ledger entry, written inside the money transaction (an outbox failure rolls the money movement back). 119 tests, 0 failures with `mvn verify`; the `concurrency` tag now has 18 tests. CI run: #27 green, 1m14s |
+| WP 5 step 5.3 Outbox relay | Done. A background relay publishes outbox rows to Kafka in id order and marks a row only after the broker acknowledges it (at-least-once). Survives a broker outage and a deleted topic without restarting the app. 133 tests, 0 failures with `mvn verify`; the `concurrency` tag has 19 tests, 3 of 3 green. CI run: #32 green, 1m39s |
 | WP 5 step 5.2 Kafka infrastructure | Done. Single-node KRaft broker (`apache/kafka:4.2.2`) in Compose, the app declares topic `wallet.transaction-completed.v1` (3 partitions, replication factor 1), shared Testcontainers broker for the tests. Kafka is not part of the health groups; with the broker stopped, health stays UP and deposits still succeed. 121 tests, 0 failures with `mvn verify`. CI run: #30 green, 1m16s |
 
 ## Outbox (WP 5, in progress)
@@ -163,6 +170,12 @@ Limitations (so far):
 - Delivery will be at-least-once, so consumers must dedupe.
 - One relay instance is planned. Several relays could break per-account order.
 - The deadlock-plus-retry outbox test forces its own deadlock, so it does not exercise the retry path of the real money services (that path is unreachable by design).
+- The relay is a single instance. Several relays would double-publish and could reorder an account's events.
+- Head-of-line blocking: a row that can never be published blocks the relay (no quarantine or dead-letter topic yet).
+- Delivery is at-least-once, so a crash between publish and mark gives a duplicate. Consumers must dedupe on the `event-id` header.
+- The relay polls the table. Hardening path: change-data-capture (Debezium) or LISTEN/NOTIFY.
+- Deleting the topic by hand loses records already marked published.
+- Spring's producer listener logs the failed record's payload at ERROR level during a broker outage. Acceptable with synthetic data; disable or redact before production.
 - Kafka is a single broker with replication factor 1 and no data volume in Compose. Fix before production: a multi-broker cluster with replication factor 3 and `min.insync.replicas` 2.
 - The app declares its topic once, at start-up, and does not retry. If it starts while the broker is down, or the broker loses its data, the topic is missing until the next app restart (broker auto-creation is off on purpose).
 - With the broker down the app logs an ERROR from `KafkaAdmin` at start-up and carries on. With an unreachable broker address, start-up takes about 10 s instead of about 3 s (admin timeouts shortened from a measured 43 s).
