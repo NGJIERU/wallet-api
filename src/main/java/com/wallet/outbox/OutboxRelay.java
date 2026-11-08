@@ -24,12 +24,15 @@ public class OutboxRelay {
     }
 
     /** failure is null when the whole batch went through. */
-    public record BatchResult(int selected, int published, Row failedRow, Throwable failure) {
+    public record BatchResult(int selected, int published, Row failedRow, Throwable failure, int consecutiveFailures) {
     }
 
     private final JdbcClient jdbc;
     private final OutboxSender sender;
     private final int batchSize;
+    private volatile boolean retryPending;
+    private long failingRowId = -1;
+    private int consecutiveFailures;
 
     public OutboxRelay(JdbcClient jdbc, OutboxSender sender,
                        @Value("${app.outbox.relay.batch-size:100}") int batchSize) {
@@ -39,6 +42,14 @@ public class OutboxRelay {
     }
 
     public BatchResult publishBatch() {
+        if (retryPending) {
+            try {
+                sender.prepareRetry();
+                retryPending = false;
+            } catch (Exception e) {
+                return failed(0, 0, null, e);
+            }
+        }
         List<Row> rows = jdbc.sql("""
                         SELECT id, aggregate_id, type, CAST(payload AS text) AS payload
                         FROM outbox_events WHERE published_at IS NULL ORDER BY id LIMIT ?
@@ -56,7 +67,7 @@ public class OutboxRelay {
                 if (e instanceof InterruptedException) {
                     Thread.currentThread().interrupt();
                 }
-                return new BatchResult(rows.size(), published, row, e);
+                return failed(rows.size(), published, row, e);
             }
             try {
                 int updated = jdbc.sql("UPDATE outbox_events SET published_at = now() WHERE id = ? AND published_at IS NULL")
@@ -66,10 +77,20 @@ public class OutboxRelay {
                 }
             } catch (RuntimeException e) {
                 // the record is on the topic but the row stays unpublished: it will be sent again (a duplicate)
-                return new BatchResult(rows.size(), published, row, e);
+                return failed(rows.size(), published, row, e);
             }
             published++;
         }
-        return new BatchResult(rows.size(), published, null, null);
+        failingRowId = -1;
+        consecutiveFailures = 0;
+        return new BatchResult(rows.size(), published, null, null, 0);
+    }
+
+    private BatchResult failed(int selected, int published, Row row, Throwable e) {
+        retryPending = true;
+        long id = row == null ? -1 : row.id();
+        consecutiveFailures = (id == failingRowId) ? consecutiveFailures + 1 : 1;
+        failingRowId = id;
+        return new BatchResult(selected, published, row, e, consecutiveFailures);
     }
 }
