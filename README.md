@@ -40,6 +40,9 @@ curl http://localhost:8081/actuator/health
 docker compose exec kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --describe --topic wallet.transaction-completed.v1
 
 # Watch the published events (key = account id, headers event-id and event-type). Ctrl+C to stop.
+# Notifications written by the consumer (one row per event):
+# docker compose exec postgres psql -U wallet -d wallet -c "select user_id, direction, amount, message from notifications order by id desc limit 10"
+
 docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server kafka:29092 \
   --topic wallet.transaction-completed.v1 --from-beginning --formatter-property print.key=true --formatter-property print.headers=true
 ```
@@ -157,10 +160,11 @@ They are a reproducible baseline for this project, not production capacity figur
 | WP 4 Concurrency proof | Done (M3 gate: GO). Random transfers, hot account, idempotency-key races and a retry on a real deadlock, 13 tests tagged `concurrency`, no production code changed. 105 tests, 0 failures with `mvn verify`. CI run: #21 green, 1m17s |
 | WP 5 step 5.0 Boot 4.1.2 migration | Done. Same behaviour and the same 105 tests, 0 failures with mvn verify. CI run: #23 green, 1m6s |
 | WP 5 step 5.1 Outbox write path | Done. One outbox event per ledger entry, written inside the money transaction (an outbox failure rolls the money movement back). 119 tests, 0 failures with `mvn verify`; the `concurrency` tag now has 18 tests. CI run: #27 green, 1m14s |
-| WP 5 step 5.3 Outbox relay | Done. A background relay publishes outbox rows to Kafka in id order and marks a row only after the broker acknowledges it (at-least-once). Survives a broker outage and a deleted topic without restarting the app. 133 tests, 0 failures with `mvn verify`; the `concurrency` tag has 19 tests, 3 of 3 green. CI run: #32 green, 1m39s |
 | WP 5 step 5.2 Kafka infrastructure | Done. Single-node KRaft broker (`apache/kafka:4.2.2`) in Compose, the app declares topic `wallet.transaction-completed.v1` (3 partitions, replication factor 1), shared Testcontainers broker for the tests. Kafka is not part of the health groups; with the broker stopped, health stays UP and deposits still succeed. 121 tests, 0 failures with `mvn verify`. CI run: #30 green, 1m16s |
+| WP 5 step 5.3 Outbox relay | Done. A background relay publishes outbox rows to Kafka in id order and marks a row only after the broker acknowledges it (at-least-once). Survives a broker outage and a deleted topic without restarting the app. 133 tests, 0 failures with `mvn verify`; the `concurrency` tag has 19 tests, 3 of 3 green. CI run: #32 green, 1m39s |
+| WP 5 step 5.4 Idempotent consumer | Done. A Kafka consumer writes one notification per event (Flyway V2 `notifications`), deduplicating on `processed_events` in the same database transaction, with the offset committed after the DB commit. Poison and exhausted-retry records go to a dead-letter topic (`wallet.transaction-completed.v1-dlt`). A broker outage at start-up does not stop the app. 155 tests, 0 failures with `mvn verify`; the `concurrency` tag has 20 tests, 3 of 3 green. CI run: #33 green, 1m49s |
 
-## Outbox (WP 5, in progress)
+## Outbox, relay and consumer (WP 5)
 
 Production-style pattern: every ledger entry writes one row to `outbox_events` in the same database transaction as the money movement. A deposit or withdrawal writes 1 event, a transfer writes 2 (debit for the source account, credit for the destination). The relay that publishes these rows to Kafka and the consumer are built in the next steps; nothing is published yet.
 
@@ -170,6 +174,11 @@ Limitations (so far):
 - Delivery will be at-least-once, so consumers must dedupe.
 - One relay instance is planned. Several relays could break per-account order.
 - The deadlock-plus-retry outbox test forces its own deadlock, so it does not exercise the retry path of the real money services (that path is unreachable by design).
+- Delivery is at-least-once, so the consumer dedupes: `processed_events` and the `notifications` row commit in one transaction, and `notifications.event_id` is UNIQUE as a second defence.
+- `processed_events` and `notifications` are never purged.
+- A permanently failing record is dead-lettered, but there is no tool to replay the dead-letter topic. Dead-letter records carry a full stack trace in a header (Spring default).
+- The dead-letter topic is declared at app start-up only: if it is deleted while the app runs, it is recreated at the next start.
+- One consumer thread, one consumer group; no REST endpoint to read notifications.
 - The relay is a single instance. Several relays would double-publish and could reorder an account's events.
 - Head-of-line blocking: a row that can never be published blocks the relay (no quarantine or dead-letter topic yet).
 - Delivery is at-least-once, so a crash between publish and mark gives a duplicate. Consumers must dedupe on the `event-id` header.
