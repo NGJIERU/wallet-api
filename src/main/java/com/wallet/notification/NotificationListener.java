@@ -21,10 +21,15 @@ public class NotificationListener {
         this.handler = handler;
     }
 
-    @KafkaListener(topics = "${app.outbox.topic}",
+    public static final String LISTENER_ID = "notification-listener";
+
+    // autoStartup=false on purpose: the container is started by NotificationConsumerLifecycle on its own thread,
+    // with retry, because constructing the Kafka consumer fails when the broker address does not resolve
+    // and that must never abort application start-up.
+    @KafkaListener(id = LISTENER_ID, topics = "${app.outbox.topic}",
             groupId = "${app.notifications.consumer-group:wallet-notifications}",
             containerFactory = "notificationListenerContainerFactory",
-            autoStartup = "${app.notifications.consumer.enabled:false}")
+            autoStartup = "false")
     public void onMessage(ConsumerRecord<String, String> record) {
         handler.handle(header(record, "event-id"), header(record, "event-type"), record.value());
     }
