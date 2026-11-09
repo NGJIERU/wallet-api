@@ -167,7 +167,7 @@ They are a reproducible baseline for this project, not production capacity figur
 
 ## Outbox, relay and consumer (WP 5)
 
-Production-style pattern: every ledger entry writes one row to `outbox_events` in the same database transaction as the money movement. A deposit or withdrawal writes 1 event, a transfer writes 2 (debit for the source account, credit for the destination). The relay that publishes these rows to Kafka and the consumer are built in the next steps; nothing is published yet.
+Production-style pattern: every ledger entry writes one row to `outbox_events` in the same database transaction as the money movement. A deposit or withdrawal writes 1 event, a transfer writes 2 (debit for the source account, credit for the destination). A background relay publishes these rows to Kafka in id order, and a consumer turns each event into exactly one notification (see the status table above and the limitations below).
 
 Limitations (so far):
 
