@@ -23,6 +23,15 @@ spring:
     admin:
       operation-timeout: 5s   # a hung broker must not stall start-up for 40 s (measured 43 s with defaults)
       close-timeout: 2s
+    consumer:
+      group-id: ${app.notifications.consumer-group}
+      enable-auto-commit: false      # offsets are committed by the container after the handler (and its DB commit) returns
+      auto-offset-reset: earliest    # a new group reads the whole topic; dedupe makes that safe
+      max-poll-records: 50
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+    listener:
+      missing-topics-fatal: false
     producer:
       acks: all                      # an ack means the broker has the record; no loss on leader change
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
@@ -48,6 +57,14 @@ server:
   shutdown: graceful
 
 app:
+  notifications:
+    consumer-group: wallet-notifications   # also the Kafka group.id and the processed_events key
+    consumer:
+      enabled: true                  # off in tests (AbstractIntegrationTest)
+    retry:
+      attempts: 4                    # total attempts for a retryable failure
+      initial-backoff: 500ms
+      multiplier: 2.0
   outbox:
     topic: wallet.transaction-completed.v1
     relay:
