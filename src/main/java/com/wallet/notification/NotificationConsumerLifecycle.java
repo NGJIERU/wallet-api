@@ -89,9 +89,13 @@ public class NotificationConsumerLifecycle implements SmartLifecycle {
         if (t != null) {
             t.interrupt();
         }
-        MessageListenerContainer c = registry.getListenerContainer(NotificationListener.LISTENER_ID);
-        if (c != null && c.isRunning()) {
-            c.stop();
+        try {
+            MessageListenerContainer c = registry.getListenerContainer(NotificationListener.LISTENER_ID);
+            if (c != null && c.isRunning()) {
+                c.stop();
+            }
+        } catch (RuntimeException e) {
+            log.warn("notification consumer stop failed: {}", e.toString());
         }
     }
 

@@ -121,4 +121,16 @@ class NotificationConsumerLifecycleTest {
         }
         assertThat(container.running.get()).as("container left stopped").isFalse();
     }
+
+    @Test
+    void l4_stopDoesNotThrowWhenTheRegistryFails() {
+        KafkaListenerEndpointRegistry registry = mock(KafkaListenerEndpointRegistry.class);
+        when(registry.getListenerContainer(NotificationListener.LISTENER_ID))
+                .thenThrow(new IllegalStateException("registry broken"));
+        lifecycle = new NotificationConsumerLifecycle(registry, BACKOFF_MIN, BACKOFF_MAX);
+        lifecycle.start();
+
+        assertThatCode(lifecycle::stop).doesNotThrowAnyException();
+        assertThat(lifecycle.isRunning()).isFalse();
+    }
 }
