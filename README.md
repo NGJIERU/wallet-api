@@ -2,6 +2,8 @@
 
 > **Release status:** portfolio project. Synthetic data only. Not audited, not deployed, not for real funds.
 > Uses production-style patterns; it is not production-deployed.
+>
+> **WP 5 status:** outbox, relay, consumer and dead-letter topic designed and implemented; M4 gate: GO (9 Nov 2026). 160 tests, 0 failures with `mvn verify`; 6 Spring contexts; CI run #37 green, 1m56s. No throughput figures were measured.
 
 Work in progress. The full README (architecture diagram, design decisions, benchmarks,
 Limitations, Hardening before production) is written in WP 9.
@@ -164,33 +166,60 @@ They are a reproducible baseline for this project, not production capacity figur
 | WP 5 step 5.3 Outbox relay | Done. A background relay publishes outbox rows to Kafka in id order and marks a row only after the broker acknowledges it (at-least-once). Survives a broker outage and a deleted topic without restarting the app. 133 tests, 0 failures with `mvn verify`; the `concurrency` tag has 19 tests, 3 of 3 green. CI run: #32 green, 1m39s |
 | WP 5 step 5.4 Idempotent consumer | Done. A Kafka consumer writes one notification per event (Flyway V2 `notifications`), deduplicating on `processed_events` in the same database transaction, with the offset committed after the DB commit. Poison and exhausted-retry records go to a dead-letter topic (`wallet.transaction-completed.v1-dlt`). A broker outage at start-up does not stop the app. 155 tests, 0 failures with `mvn verify`; the `concurrency` tag has 20 tests, 3 of 3 green. CI run: #33 green, 1m49s |
 | WP 5 step 5.5 Failure proof | Done. Tests for the consumer lifecycle (stubbed registry) and for the whole chain against a hung broker (money endpoints unaffected, everything drains after the unpause with no restart). The `concurrency` tag passed 10 of 10 runs with zero ordering violations and `mvn verify` 3 of 3. A Docker chaos run (SIGKILL and SIGTERM mid-drain, broker paused, broker stopped, topic deleted, forced duplicates) ended with ledger entries = outbox events = notifications and no duplicate notification. 159 tests, 0 failures with `mvn verify`. CI run: #35 green, 2m2s |
+| WP 5 step 5.6 M4 gate | GO on G1 to G5. `NotificationConsumerLifecycle.stop()` no longer throws when the registry fails (test L4, failing first on the old code). Fresh-clone `mvn verify` green and Compose smoke green. 160 tests, 0 failures. CI run: #37 green, 1m56s |
 
 ## Outbox, relay and consumer (WP 5)
 
 Production-style pattern: every ledger entry writes one row to `outbox_events` in the same database transaction as the money movement. A deposit or withdrawal writes 1 event, a transfer writes 2 (debit for the source account, credit for the destination). A background relay publishes these rows to Kafka in id order, and a consumer turns each event into exactly one notification (see the status table above and the limitations below).
 
-Limitations (so far):
+### Architecture of the outbox chain
 
-- The outbox table is never purged and grows without bound. Fix before production: a retention job or partitioning.
-- Delivery will be at-least-once, so consumers must dedupe.
-- One relay instance is planned. Several relays could break per-account order.
-- The deadlock-plus-retry outbox test forces its own deadlock, so it does not exercise the retry path of the real money services (that path is unreachable by design).
-- Delivery is at-least-once, so the consumer dedupes: `processed_events` and the `notifications` row commit in one transaction, and `notifications.event_id` is UNIQUE as a second defence.
-- `processed_events` and `notifications` are never purged.
-- A permanently failing record is dead-lettered, but there is no tool to replay the dead-letter topic. Dead-letter records carry a full stack trace in a header (Spring default).
-- The dead-letter topic is declared at app start-up only: if it is deleted while the app runs, it is recreated at the next start.
-- One consumer thread, one consumer group; no REST endpoint to read notifications.
-- The relay is a single instance. Several relays would double-publish and could reorder an account's events.
-- Head-of-line blocking: a row that can never be published blocks the relay (no quarantine or dead-letter topic yet).
-- Delivery is at-least-once, so a crash between publish and mark gives a duplicate. Consumers must dedupe on the `event-id` header.
-- The relay polls the table. Hardening path: change-data-capture (Debezium) or LISTEN/NOTIFY.
-- Deleting the topic by hand loses records already marked published.
-- Spring's producer listener logs the failed record's payload at ERROR level during a broker outage. Acceptable with synthetic data; disable or redact before production.
-- Kafka is a single broker with replication factor 1 and no data volume in Compose. Fix before production: a multi-broker cluster with replication factor 3 and `min.insync.replicas` 2.
-- The app declares its topic once, at start-up, and does not retry. If it starts while the broker is down, or the broker loses its data, the topic is missing until the next app restart (broker auto-creation is off on purpose).
-- With the broker down the app logs an ERROR from `KafkaAdmin` at start-up and carries on. With an unreachable broker address, start-up takes about 10 s instead of about 3 s (admin timeouts shortened from a measured 43 s).
-- A notification for a user that does not exist (a foreign-key failure) is retried 4 times and then dead-lettered.
-- If the app starts while the broker is down, the dead-letter topic is not re-declared when the broker returns (the relay re-declares only the main topic). A poison record arriving before the next app restart has no dead-letter topic to go to.
-- Graceful shutdown can interrupt the relay between the broker acknowledgement and the mark, which produces one duplicate on the topic (seen once in the chaos run). The consumer absorbed it.
+```mermaid
+flowchart LR
+    API["Money API: deposit, withdrawal, transfer"] --> TX
+    subgraph TX["One PostgreSQL transaction"]
+        LE["ledger_entries"]
+        OB["outbox_events (published_at IS NULL until sent)"]
+    end
+    OB -->|"polled in id order"| RELAY["OutboxRelayScheduler, OutboxRelay, KafkaOutboxSender"]
+    RELAY -->|"key = account id, headers event-id and event-type"| TOPIC[("wallet.transaction-completed.v1, 3 partitions")]
+    RELAY -->|"UPDATE published_at only after the broker ack"| OB
+    TOPIC --> LISTENER["NotificationListener then NotificationHandler"]
+    subgraph TX2["One PostgreSQL transaction, offset committed afterwards"]
+        PE["processed_events (dedupe marker)"]
+        NT["notifications (event_id UNIQUE)"]
+    end
+    LISTENER --> TX2
+    LISTENER -->|"poison record or retries exhausted"| DLT[("wallet.transaction-completed.v1-dlt")]
+```
+
+Limitations:
+
+| Limitation | Impact | Why accepted | Fix before production |
+|---|---|---|---|
+| One relay instance | Several relays would double-publish and could reorder an account's events | Single-node portfolio project | Leader election or partitioned claims (for example `FOR UPDATE SKIP LOCKED` per partition) |
+| One consumer thread, one consumer group | Throughput is bounded by one thread; no REST endpoint to read notifications | Correctness was the goal, not scale | More partitions and consumers; a read endpoint |
+| Head-of-line blocking | A row that can never be published blocks every row behind it | Keeps per-account order; no quarantine built | Quarantine or dead-letter for unpublishable rows, with alerting |
+| Kafka: one broker, replication factor 1, no data volume in Compose | A broker loss loses data | Disposable local broker | 3 brokers, replication factor 3, `min.insync.replicas` 2 |
+| At-least-once with dedupe, not exactly-once | Duplicates reach the topic (seen in S3 and forced in S7); the consumer absorbs them | Idempotent consumer gives the same visible effect | Keep the dedupe; version the events |
+| A notification for a user that does not exist (foreign-key failure) is retried 4 times, then dead-lettered | Delay, then a dead-letter record | Rare in this model | Classify the failure as non-retryable |
+| Dead-letter records carry a full stack trace in a header; no replay tool | Large records; dead-lettered events need manual handling | Spring default; no replay need yet | Trim headers; replay tooling |
+| Deleting a topic by hand loses records already marked published | Those events are not on the topic any more (S6: notifications existed only because they were consumed before) | Manual operator action | Retention policy, backups, a replay path from the outbox |
+| The dead-letter topic is not re-declared if deleted while the app runs, or if the app started while the broker was down (FT3 showed it missing) | A poison record arriving then has no dead-letter topic | Narrow window | Re-declare it in the relay's `prepareRetry` or on a retry |
+| `NotificationConsumerLifecycle.stop()` during a start in progress could leave the container running | At application shutdown the JVM is exiting anyway, so no lasting effect is expected | The one attempted fix had no test that failed on the old code, so it was not shipped | Bounded join on the starter thread, plus a test against the real container's behaviour |
+| A `kill -9` duplicate was not observed | Dedupe under SIGKILL is not demonstrated (one kill landed outside the send-then-mark window); only SIGTERM (S3) and forced (S7) duplicates were observed | One kill is a small sample | Repeat kills at scale |
+| The FT3 outage was short (about 1 s with rows waiting; S4 and S5 about 10 to 20 s) | Back-off growth was seen for one doubling only | Time box | A long-outage soak test |
+| The relay polls the table | Up to one poll interval of delay, and constant query load | Simple and testable | Change-data-capture (Debezium) or LISTEN/NOTIFY |
+| `outbox_events`, `processed_events` and `notifications` are never purged | Tables grow without bound | Synthetic data | Retention job or partitioning |
+| Broker down at start-up: `KafkaAdmin` logs an ERROR and start-up takes about 10 s instead of about 3 s | Noisy log, slower start | Admin timeouts already cut from a measured 43 s | Health-aware start-up |
+| The deadlock-plus-retry outbox test forces its own deadlock | It does not exercise the retry path of the real money services (unreachable by design) | Retry is tested separately in WP 4 | None needed |
+| Local Docker start-up variance (observation): slow Ryuk start (6 to 19.5 s against about 2 s) coincided with the slow tag runs | Local timing varies between runs | Outside the app; cause not known | None for the app; investigate Docker Desktop |
+| Chaos run is a correctness check, not a benchmark | No throughput figure exists | By design | A proper load test |
+
+Hardening before production (short list): replication factor 3 with `min.insync.replicas` 2; relay leader election or partitioned claims; dead-letter replay tooling; metrics and alerting on outbox lag; retention and cleanup of published outbox rows and `processed_events`; schema registry and event versioning.
+
+### Design decisions
+
+Pending: the author's own words (to be added). Questions: why an outbox table instead of publishing inside the money transaction; why one event per ledger entry, keyed by account id; what happens on a crash after the broker ack but before the mark, and why that is acceptable; why the consumer writes the marker and the notification in one transaction and commits the offset afterwards; why a polling relay rather than Debezium, and what polling costs; why the relay stops at the first failed row and when that hurts; why a notification is a stored row.
 
 What the failure testing proved: with a hung, stopped or deleted broker the money endpoints kept returning 201 and health stayed UP; after the broker returned, every outbox row was published and every event produced exactly one notification without restarting the app; forced and shutdown-induced duplicates on the topic produced no duplicate notification. What it did not prove: that a `kill -9` produces a duplicate (the one kill did not), replay of records lost with a deleted topic, a long outage, several consumers or relays, other crash points on the consumer side, or any throughput figure. The chaos run is a correctness check, not a benchmark.
