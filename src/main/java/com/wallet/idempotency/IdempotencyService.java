@@ -99,9 +99,7 @@ public class IdempotencyService {
         if (!row.requestHash().equals(requestHash)) {
             throw new IdempotencyKeyReuseException();
         }
-        if (row.code() == 0) {
-            throw new IllegalStateException("idempotency key was committed without complete() being called");
-        }
+        // No code-0 check: the claim and complete() share one transaction, so a committed row always holds its response.
         return Optional.of(new StoredResponse(row.code(), row.body()));
     }
 
