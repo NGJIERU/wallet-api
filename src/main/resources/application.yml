@@ -18,6 +18,10 @@ spring:
           time_zone: UTC
   flyway:
     enabled: true
+  data:
+    redis:
+      repositories:
+        enabled: false           # JPA and Redis coexist: no Spring Data repository scanning for Redis
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
     admin:
@@ -44,6 +48,9 @@ spring:
         linger.ms: 0
 
 management:
+  health:
+    redis:
+      enabled: false             # Redis is not part of health: the limiter fails open, so an outage must not turn health DOWN
   endpoints:
     web:
       exposure:
