@@ -16,6 +16,11 @@ import org.springframework.security.oauth2.jwt.JwtEncoder;
 import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 import org.springframework.security.oauth2.jwt.NimbusJwtEncoder;
 import org.springframework.security.config.Customizer;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter;
+import com.wallet.ratelimit.RateLimitFilter;
+import com.wallet.ratelimit.RateLimitProperties;
+import com.wallet.ratelimit.RateLimiter;
 
 import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
@@ -27,7 +32,8 @@ import java.nio.charset.StandardCharsets;
 public class SecurityConfig {
 
     @Bean
-    SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+    SecurityFilterChain filterChain(HttpSecurity http, ObjectProvider<RateLimiter> rateLimiter,
+                                    ObjectProvider<RateLimitProperties> rateLimitProperties) throws Exception {
         http
                 .csrf(csrf -> csrf.disable())
                 .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
@@ -35,6 +41,12 @@ public class SecurityConfig {
                         .requestMatchers("/auth/**", "/actuator/health/**", "/error").permitAll()
                         .anyRequest().authenticated())
                 .oauth2ResourceServer(oauth -> oauth.jwt(Customizer.withDefaults()));
+        RateLimiter limiter = rateLimiter.getIfAvailable();
+        RateLimitProperties limits = rateLimitProperties.getIfAvailable();
+        if (limiter != null && limits != null) {
+            // Deliberately NOT a bean: a Filter bean is also registered in the servlet container and would run twice.
+            http.addFilterAfter(new RateLimitFilter(limiter, limits), BearerTokenAuthenticationFilter.class);
+        }
         return http.build();
     }
 
