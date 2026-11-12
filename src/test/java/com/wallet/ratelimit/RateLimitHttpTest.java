@@ -117,7 +117,7 @@ class RateLimitHttpTest extends AbstractRateLimitIntegrationTest {
         Map<String, Object> adviceBody = mapper.readValue(advice.getResponse().getContentAsString(), Map.class);
         System.out.println("[LIMITER H6 429 fields=" + limitedBody.keySet() + " advice(404) fields=" + adviceBody.keySet()
                 + " 429 type=" + limited.getResponse().getContentType() + " advice type=" + advice.getResponse().getContentType() + "]");
-        assertThat(limited.getResponse().getContentType()).startsWith("application/problem+json");
+        assertThat(limited.getResponse().getContentType()).isEqualTo(advice.getResponse().getContentType());
         assertThat(limitedBody.keySet()).containsExactlyInAnyOrderElementsOf(adviceBody.keySet());
         assertThat(limitedBody.get("status")).isEqualTo(429);
     }

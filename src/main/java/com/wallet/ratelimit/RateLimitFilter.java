@@ -5,6 +5,7 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ProblemDetail;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -15,6 +16,7 @@ import tools.jackson.databind.json.JsonMapper;
 
 import java.io.IOException;
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.regex.Pattern;
@@ -101,8 +103,8 @@ public class RateLimitFilter extends OncePerRequestFilter {
         response.setStatus(HttpStatus.TOO_MANY_REQUESTS.value());
         response.setHeader("Retry-After", Long.toString(seconds));
         response.setHeader("X-RateLimit-Remaining", "0");
-        response.setContentType("application/problem+json");
-        response.setCharacterEncoding("UTF-8");
-        response.getWriter().write(MAPPER.writeValueAsString(body));
+        // same media type string as the advice (no charset parameter); the body is written as UTF-8 bytes
+        response.setContentType(MediaType.APPLICATION_PROBLEM_JSON_VALUE);
+        response.getOutputStream().write(MAPPER.writeValueAsString(body).getBytes(StandardCharsets.UTF_8));
     }
 }
