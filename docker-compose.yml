@@ -42,6 +42,16 @@ services:
       retries: 12
       start_period: 15s
 
+  redis:
+    image: redis:7.2.17-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    # no volume and no published port on purpose: limiter state is disposable and only the app talks to Redis
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   app:
     build: .
     environment:
@@ -50,12 +60,17 @@ services:
       DB_PASSWORD: wallet
       JWT_SECRET: dev-only-secret-change-me-dev-only-secret-change-me
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      SPRING_DATA_REDIS_HOST: redis
+      APP_RATELIMIT_ENABLED: "true"
     ports:
       - "8081:8080"
     depends_on:
       postgres:
         condition: service_healthy
       kafka:
+        condition: service_healthy
+      # depends_on only orders start-up: if Redis dies later the app keeps running (limiter fails open)
+      redis:
         condition: service_healthy
 
 volumes:
