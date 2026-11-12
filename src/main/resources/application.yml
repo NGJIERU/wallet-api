@@ -64,6 +64,8 @@ server:
   shutdown: graceful
 
 app:
+  ratelimit:
+    enabled: false                 # on in Compose (APP_RATELIMIT_ENABLED) and in the limiter HTTP tests; limits default in code
   notifications:
     consumer-group: wallet-notifications   # also the Kafka group.id and the processed_events key
     consumer:
