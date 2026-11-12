@@ -3,11 +3,14 @@ package com.wallet.ratelimit;
 import io.lettuce.core.ClientOptions;
 import io.lettuce.core.SocketOptions;
 import io.lettuce.core.TimeoutOptions;
+import io.lettuce.core.resource.ClientResources;
+import io.lettuce.core.resource.Delay;
 import org.springframework.data.redis.connection.RedisStandaloneConfiguration;
 import org.springframework.data.redis.connection.lettuce.LettuceClientConfiguration;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 
 import java.time.Duration;
+import java.util.concurrent.TimeUnit;
 
 /**
  * The one place the limiter's Redis client options are defined; the tests and Boot's auto-configured
@@ -18,6 +21,9 @@ public final class RedisClientSettings {
 
     public static final Duration COMMAND_TIMEOUT = Duration.ofMillis(100);
     public static final Duration CONNECT_TIMEOUT = Duration.ofMillis(500);
+    /** Reconnect back-off: exponential (base 2), never below 100 ms, capped at 2 s. Chosen, not measured. */
+    public static final Duration RECONNECT_MIN_DELAY = Duration.ofMillis(100);
+    public static final Duration RECONNECT_MAX_DELAY = Duration.ofSeconds(2);
 
     private RedisClientSettings() {
     }
@@ -31,6 +37,11 @@ public final class RedisClientSettings {
                 .socketOptions(socket)
                 .timeoutOptions(timeouts)
                 .build();
+    }
+
+    /** Lettuce's default reconnect cap is 30 s; after a Redis restart that would delay recovery by up to that long. */
+    public static void customizeResources(ClientResources.Builder builder) {
+        builder.reconnectDelay(Delay.exponential(RECONNECT_MIN_DELAY, RECONNECT_MAX_DELAY, 2, TimeUnit.MILLISECONDS));
     }
 
     /** Applies the shared settings to any Lettuce client configuration builder (Boot's or our own). */
