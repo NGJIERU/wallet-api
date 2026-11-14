@@ -3,7 +3,9 @@
 > **Release status:** portfolio project. Synthetic data only. Not audited, not deployed, not for real funds.
 > Uses production-style patterns; it is not production-deployed.
 >
-> **WP 5 status:** outbox, relay, consumer and dead-letter topic designed and implemented; M4 gate: GO (9 Nov 2026). 160 tests, 0 failures with `mvn verify`; 6 Spring contexts; CI run #37 green, 1m56s. No throughput figures were measured.
+> **WP 5 status:** outbox, relay, consumer and dead-letter topic designed and implemented; M4 gate: GO (9 Nov 2026). 160 tests, 0 failures with `mvn verify`; 6 Spring contexts; CI run #37 green, 1m56s (code commit `42e1e65`); CI run #38 green, 2m11s (docs commit `bc6499c`, tagged `m4-gate`). No throughput figures were measured. **The WP 5 design-decision answers (see Design decisions below) are still pending.**
+>
+> **WP 6 status:** Redis rate limiter (Lua token bucket, fail-open) designed and implemented; steps 6.0 to 6.4 done, gate decision pending (the design-decision answers, Q1 to Q12, are still to be written). 204 tests, 0 failures with `mvn verify`; 7 Spring contexts; CI run #41 green, 2m22s. No throughput figures were measured.
 
 Work in progress. The full README (architecture diagram, design decisions, benchmarks,
 Limitations, Hardening before production) is written in WP 9.
@@ -31,7 +33,7 @@ On other platforms, install any JDK 21 distribution and point `JAVA_HOME` at it.
 ## Quickstart
 
 ```bash
-# Start Postgres, Kafka and the app
+# Start Postgres, Kafka, Redis and the app
 docker compose up --build
 
 # Health check (compose maps the app to host port 8081)
@@ -167,6 +169,10 @@ They are a reproducible baseline for this project, not production capacity figur
 | WP 5 step 5.4 Idempotent consumer | Done. A Kafka consumer writes one notification per event (Flyway V2 `notifications`), deduplicating on `processed_events` in the same database transaction, with the offset committed after the DB commit. Poison and exhausted-retry records go to a dead-letter topic (`wallet.transaction-completed.v1-dlt`). A broker outage at start-up does not stop the app. 155 tests, 0 failures with `mvn verify`; the `concurrency` tag has 20 tests, 3 of 3 green. CI run: #33 green, 1m49s |
 | WP 5 step 5.5 Failure proof | Done. Tests for the consumer lifecycle (stubbed registry) and for the whole chain against a hung broker (money endpoints unaffected, everything drains after the unpause with no restart). The `concurrency` tag passed 10 of 10 runs with zero ordering violations and `mvn verify` 3 of 3. A Docker chaos run (SIGKILL and SIGTERM mid-drain, broker paused, broker stopped, topic deleted, forced duplicates) ended with ledger entries = outbox events = notifications and no duplicate notification. 159 tests, 0 failures with `mvn verify`. CI run: #35 green, 2m2s |
 | WP 5 step 5.6 M4 gate | GO on G1 to G5. `NotificationConsumerLifecycle.stop()` no longer throws when the registry fails (test L4, failing first on the old code). Fresh-clone `mvn verify` green and Compose smoke green. 160 tests, 0 failures. CI run: #37 green, 1m56s |
+| WP 6 step 6.1 Token bucket | Dead code branch removed from the idempotency claim (the lock-timeout 409 path stays). Redis starter added with the Redis health indicator and repository scanning off. Lua token bucket and fail-open `RateLimiter`; atomicity proven against a real Redis (exactly the capacity allowed in 5 of 5 runs for each tested combination). 172 tests, 6 contexts. CI run: #39 green, 2m16s |
+| WP 6 step 6.2 Wiring | Validated `app.ratelimit.*` properties, flag-gated limiter, filter after bearer authentication, 429 `ProblemDetail` with `Retry-After`, Redis in Compose, a seventh Spring context with its own Redis. 190 tests. CI run: #40 green, 2m18s |
+| WP 6 step 6.3 Failure behaviour | One WARN per outage window and one INFO on recovery, explicit reconnect back-off, 429 content type aligned with the advice. Paused, stopped and restarted Redis: money endpoints keep returning 201, health stays UP, limiting resumes without restarting the app. 204 tests, 7 contexts. CI run: #41 green, 2m22s |
+| WP 6 step 6.4 Docker proof | No repository change. Burst, Redis paused and stopped under load, app start-up with Redis absent and a Redis restart on the Compose stack; ledger reconciled and ledger = outbox = notifications after every scenario. Not a benchmark |
 
 ## Outbox, relay and consumer (WP 5)
 
@@ -223,3 +229,86 @@ Hardening before production (short list): replication factor 3 with `min.insync.
 Pending: the author's own words (to be added). Questions: why an outbox table instead of publishing inside the money transaction; why one event per ledger entry, keyed by account id; what happens on a crash after the broker ack but before the mark, and why that is acceptable; why the consumer writes the marker and the notification in one transaction and commits the offset afterwards; why a polling relay rather than Debezium, and what polling costs; why the relay stops at the first failed row and when that hurts; why a notification is a stored row.
 
 What the failure testing proved: with a hung, stopped or deleted broker the money endpoints kept returning 201 and health stayed UP; after the broker returned, every outbox row was published and every event produced exactly one notification without restarting the app; forced and shutdown-induced duplicates on the topic produced no duplicate notification. What it did not prove: that a `kill -9` produces a duplicate (the one kill did not), replay of records lost with a deleted topic, a long outage, several consumers or relays, other crash points on the consumer side, or any throughput figure. The chaos run is a correctness check, not a benchmark.
+
+## Rate limiting (WP 6)
+
+Production-style pattern: a Redis-backed token bucket (one Lua script) in front of the API that **fails open** when Redis is unavailable. It is off by default (`app.ratelimit.enabled=false`) and switched on by the Compose setup (`APP_RATELIMIT_ENABLED=true`), so it is part of the Docker quickstart and absent from the existing test contexts.
+
+### How it works
+
+- **Script:** `scripts/token_bucket.lua`. State is a hash (`tokens`, `ts`) per key. Time comes from Redis `TIME` inside the script, so every app instance shares one clock. A new key starts full. Cost is always 1. It returns allowed, remaining tokens and retry-after in milliseconds. The key expires when the bucket would be full again (minimum 1 s).
+- **Filter:** `RateLimitFilter` is added to the Spring Security chain after bearer-token authentication. It is deliberately not a bean (a `Filter` bean is also registered in the servlet container and would run twice, halving every limit; test H1 proves exactly one token per request).
+- **Counting rule:** it counts requests, not business operations. It runs before validation, authorization and idempotency, so an invalid request and an idempotent replay each consume a token.
+- **429:** `ProblemDetail` JSON with content type `application/problem+json` and the same field names as the advice's 4xx bodies (`title`, `status`, `detail`, `instance`), plus `Retry-After` (whole seconds, at least 1) and `X-RateLimit-Remaining: 0`. Allowed requests carry `X-RateLimit-Remaining`. Degraded (fail-open) responses carry no extra header.
+- **Redis client (chosen, not measured):** command timeout 100 ms, connect timeout 500 ms, commands rejected at once while disconnected, reconnect back-off exponential from 100 ms capped at 2 s, **no retry** on the limiter call.
+- **Logging:** one WARN per outage window (`app.ratelimit.log-window`, default 30 s) with the number of suppressed failures, one INFO on recovery, nothing on the healthy path.
+- **Compose:** `redis:7.2.17-alpine` (7.2 is the last BSD-licensed line), persistence off, no volume, no published port, `redis-cli ping` health check. The app waits for it at start-up; `depends_on` orders start-up only. Redis is not part of `/actuator/health` (`management.health.redis.enabled=false`).
+
+### Request path through the limiter
+
+```mermaid
+flowchart TD
+    REQ["HTTP request"] --> BEARER["BearerTokenAuthenticationFilter (invalid token: 401, limiter not reached)"]
+    BEARER --> RLF["RateLimitFilter"]
+    RLF -->|"/actuator/health, /error, no valid token"| NEXT["controllers"]
+    RLF -->|"scope + key: auth by client IP, money and default by user id"| RL["RateLimiter.tryAcquire"]
+    RL -->|"EVAL scripts/token_bucket.lua (Redis TIME inside)"| REDIS[("Redis")]
+    REDIS -->|"allowed, remaining, retry-after"| RL
+    RL -->|"Redis error or timeout: allowed, degraded = true (fail-open)"| RLF
+    RLF -->|"allowed: X-RateLimit-Remaining"| NEXT
+    RLF -->|"denied"| R429["429 ProblemDetail + Retry-After + X-RateLimit-Remaining: 0"]
+```
+
+### Scopes and defaults
+
+| Scope | Key | Paths | Default (not tuned) |
+|---|---|---|---|
+| `auth` | `rl:auth:{client IP}` | `/auth/**` | burst 10, 10 per minute |
+| `money` | `rl:money:{user id}` | `POST /accounts/{id}/deposits`, `POST /accounts/{id}/withdrawals`, `POST /transfers` | burst 20, 5 per second |
+| `default` | `rl:default:{user id}` | every other authenticated endpoint | burst 60, 20 per second |
+| none | none | `/actuator/health/**`, `/error`, requests without a valid token (the chain answers 401) | not limited |
+
+Properties: `app.ratelimit.enabled`, `.auth|money|default.capacity`, `.auth|money|default.refill-per-second`, `.log-window`. A capacity or rate of 0 or below stops start-up. These defaults are starting values, not claims about correct limits.
+
+### Evidence
+
+Tests: 204 with `mvn verify`, 0 failures, 7 Spring contexts (the limiter-on context has its own Redis container that the tests pause, stop and restart). CI #41 green, 2m22s.
+
+- **Atomicity (no Spring):** parallel callers against one bucket with negligible refill: capacity 1 with 32 callers, 10 with 50, and 100 with 200 each allowed exactly the capacity in 5 of 5 runs; three keys at once gave exactly 10 each. With 64 callers against capacity 100 all 64 were allowed.
+- **HTTP:** exactly 5 deposits then 429 for capacity 5, and the denied request wrote no ledger, outbox or idempotency rows; users are isolated; reads use a separate bucket; login is limited per client IP; health is never limited; the 429 body has the same fields and content type as an advice body.
+- **Failure behaviour (own Redis container):** with Redis paused, deposits beyond the capacity all returned 201, health stayed UP, one WARN was logged, and a request cost about the 100 ms command timeout (medians 116 and 130 ms), so the latency is bounded by the timeout, not fast. With Redis stopped the median was 6 ms (this setup only). After unpause or restart limiting resumed with no application restart.
+- **Docker run (Compose stack, Docker Desktop, one local run each, scripts not committed, not a benchmark):** 10 logins per minute then 429 with `Retry-After`; 100 parallel deposits from one user gave 20 allowed and 80 denied; Redis paused for about 15 s and stopped for about 15 s under continuous load gave 0 5xx and 0 client failures in the load output, health UP in every sample, one WARN and one INFO per outage; the app started and served deposits with Redis absent and limiting resumed when Redis came back without restarting the app; a Redis restart reset a user's bucket; the recovery line appeared about 2.3 s after the Redis container started (three runs). After every scenario the ledger reconciled and ledger entries = outbox events = notifications, with the dead-letter topic empty.
+- **Not proven:** several app instances, a long outage, real proxies, sustained load, any throughput.
+
+### Limitations
+
+| Limitation | Impact | Why accepted | Fix before production |
+|---|---|---|---|
+| Fail-open | During a Redis outage nothing is throttled, including login (credential stuffing exposure) | The user chose availability of money endpoints over protection (same principle as the Kafka outage) | Fail-closed for `auth` only, or a local fallback limiter |
+| `X-Forwarded-For` is not trusted | Behind a proxy every client shares one IP. On Docker Desktop all local clients appear as one address and share one `auth` bucket, which throttles a naive load test | No proxy in this project | Trusted-proxy configuration |
+| Invalid or expired tokens get 401 before the limiter runs | A flood of bad tokens is not limited | The limiter needs an authenticated user id | Limit by IP before authentication |
+| Counts requests, not operations | Replays and invalid requests consume tokens | Protects the database from abuse | Count only completed operations |
+| A Redis restart resets all buckets | Every user briefly has a full bucket (observed) | Limiter state is disposable, no persistence | Persistence or replication if it matters |
+| Single Redis node, no persistence | Redis loss disables limiting (fail-open) | Portfolio project | Redis with replication |
+| Compose `depends_on` orders start-up only | If Redis dies later the app keeps running | Fail-open is the intended behaviour | None needed |
+| Timeouts and reconnect back-off are chosen, not measured | Values may not suit other environments | Time box | Measure under real conditions |
+| A paused Redis costs about the command timeout per request | Added latency during that kind of outage | Bounded by design | Circuit breaker that skips Redis after repeated failures |
+| Defaults are not tuned | The numbers are starting points | No load data yet | Tune after the WP 8 load tests |
+| Redis idempotency fast path not built (chosen, not a defect) | Replays always go to Postgres | Postgres inside the money transaction is the single source of truth for idempotency; a Redis fast path would add a second source of truth and a new failure mode on the money path, for a latency benefit nothing here needs | Only if replay latency is measured to matter, with Redis as a hint and Postgres as the authority |
+| Tests: single local runs | Recovery times and latencies are not benchmarks | By design | A proper load test |
+
+### Hardening before production (rate limiter)
+
+Trusted-proxy handling for the client IP; Redis replication or a managed Redis; per-endpoint limits tuned from measurement; metrics and alerts on degraded decisions; fail-closed or a local fallback limiter for the login scope.
+
+### Design decisions (limiter)
+
+Pending: the author's own words (to be added). Questions:
+
+- Q8: Why a token bucket rather than a fixed window?
+- Q9: Why a Lua script in Redis rather than reading and writing the count from Java?
+- Q10: Why use Redis's `TIME` inside the script rather than the application's clock?
+- Q11: Why fail open when Redis is down, and what does it cost? What would fail closed cost?
+- Q12: Why key money endpoints by user id but login by IP?
+
+Also pending, for the WP 6 gate: the answers to the WP 5 questions (see Design decisions above).
