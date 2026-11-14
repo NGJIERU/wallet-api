@@ -5,7 +5,7 @@
 >
 > **WP 5 status:** outbox, relay, consumer and dead-letter topic designed and implemented; M4 gate: GO (9 Nov 2026). 160 tests, 0 failures with `mvn verify`; 6 Spring contexts; CI run #37 green, 1m56s (code commit `42e1e65`); CI run #38 green, 2m11s (docs commit `bc6499c`, tagged `m4-gate`). No throughput figures were measured. **The WP 5 design-decision answers (see Design decisions below) are still pending.**
 >
-> **WP 6 status:** Redis rate limiter (Lua token bucket, fail-open) designed and implemented; steps 6.0 to 6.4 done, gate decision pending (the design-decision answers, Q1 to Q12, are still to be written). 204 tests, 0 failures with `mvn verify`; 7 Spring contexts; CI run #41 green, 2m22s. No throughput figures were measured.
+> **WP 6 status:** Redis rate limiter (Lua token bucket, fail-open) designed and implemented; steps 6.0 to 6.4 done, gate decision pending (the design-decision answers, Q1 to Q12, are still to be written). 204 tests, 0 failures with `mvn verify`; 7 Spring contexts; CI run #43 green, 2m28s (run #42, a docs-only commit, failed on a test-isolation defect in an existing test; fixed in `8a901c7`). No throughput figures were measured.
 
 Work in progress. The full README (architecture diagram, design decisions, benchmarks,
 Limitations, Hardening before production) is written in WP 9.
@@ -173,6 +173,7 @@ They are a reproducible baseline for this project, not production capacity figur
 | WP 6 step 6.2 Wiring | Validated `app.ratelimit.*` properties, flag-gated limiter, filter after bearer authentication, 429 `ProblemDetail` with `Retry-After`, Redis in Compose, a seventh Spring context with its own Redis. 190 tests. CI run: #40 green, 2m18s |
 | WP 6 step 6.3 Failure behaviour | One WARN per outage window and one INFO on recovery, explicit reconnect back-off, 429 content type aligned with the advice. Paused, stopped and restarted Redis: money endpoints keep returning 201, health stays UP, limiting resumes without restarting the app. 204 tests, 7 contexts. CI run: #41 green, 2m22s |
 | WP 6 step 6.4 Docker proof | No repository change. Burst, Redis paused and stopped under load, app start-up with Redis absent and a Redis restart on the Compose stack; ledger reconciled and ledger = outbox = notifications after every scenario. Not a benchmark |
+| WP 6 CI incident (test isolation) | CI run #42 failed in `NotificationFullChainTest` (an extra notification, ledger entry 5, for account 6). Cause: `NotificationListenerTest` hard-coded account id 6 and ledger entry id 5 and wrote that row into the shared test database, so it appeared in another test's results whenever that test's wallet received account id 6, which depends on test class execution order. Not an application defect. Fixed in `8a901c7` (random ids from a range sequences never reach; no assertion changed); reproduced locally with `-Dsurefire.runOrder=reversealphabetical` before the fix and passing after. CI run #43 green, 2m28s. Why #41 passed: surefire's default filesystem class order differed per commit. In #42 and its re-run NotificationListenerTest ran at position 2, before NotificationFullChainTest at position 5. In #41 and #43 it ran after (27 vs 25, 43 vs 41). The order is stable per commit, so the re-run failed identically. Why the order changes between commits is inferred, not verified. |
 
 ## Outbox, relay and consumer (WP 5)
 
