@@ -27,7 +27,8 @@ class NotificationListenerTest extends AbstractIntegrationTest {
     void theSameEventDeliveredTwiceThroughTheListenerGivesOneNotification() {
         long userId = users.saveAndFlush(new User("listener-" + UUID.randomUUID() + "@example.test", "x")).getId();
         long eventId = ThreadLocalRandom.current().nextLong(1L << 40, 1L << 50);
-        String payload = NotificationTestData.payload(UUID.randomUUID(), 5L, 6L, userId, "CREDIT", "DEPOSIT", 900, "SGD");
+        String payload = NotificationTestData.payload(UUID.randomUUID(), ThreadLocalRandom.current().nextLong(1L << 40, 1L << 50),
+                ThreadLocalRandom.current().nextLong(1L << 40, 1L << 50), userId, "CREDIT", "DEPOSIT", 900, "SGD");
 
         listener.onMessage(record(eventId, "TransactionCompleted.v1", payload, 0));
         listener.onMessage(record(eventId, "TransactionCompleted.v1", payload, 1));
