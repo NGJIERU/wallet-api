@@ -3,9 +3,9 @@
 > **Release status:** portfolio project. Synthetic data only. Not audited, not deployed, not for real funds.
 > Uses production-style patterns; it is not production-deployed.
 >
-> **WP 5 status:** outbox, relay, consumer and dead-letter topic designed and implemented; M4 gate: GO (9 Nov 2026). 160 tests, 0 failures with `mvn verify`; 6 Spring contexts; CI run #37 green, 1m56s (code commit `42e1e65`); CI run #38 green, 2m11s (docs commit `bc6499c`, tagged `m4-gate`). No throughput figures were measured. **The WP 5 design-decision answers (see Design decisions below) are still pending.**
+> **WP 5 status:** outbox, relay, consumer and dead-letter topic designed and implemented; M4 gate: GO (9 Nov 2026). 160 tests, 0 failures with `mvn verify`; 6 Spring contexts; CI run #37 green, 1m56s (code commit `42e1e65`); CI run #38 green, 2m11s (docs commit `bc6499c`, tagged `m4-gate`). No throughput figures were measured.
 >
-> **WP 6 status:** Redis rate limiter (Lua token bucket, fail-open) designed and implemented; steps 6.0 to 6.4 done, gate decision pending (the design-decision answers, Q1 to Q12, are still to be written). 204 tests, 0 failures with `mvn verify`; 7 Spring contexts; CI run #43 green, 2m28s (run #42, a docs-only commit, failed on a test-isolation defect in an existing test; fixed in `8a901c7`). No throughput figures were measured.
+> **WP 6 status:** Redis rate limiter (Lua token bucket, fail-open) designed and implemented; steps 6.0 to 6.4 done, gate decision pending. 204 tests, 0 failures with `mvn verify`; 7 Spring contexts; CI run #43 green, 2m28s (run #42, a docs-only commit, failed on a test-isolation defect in an existing test; fixed in `8a901c7`). No throughput figures were measured.
 
 Work in progress. The full README (architecture diagram, design decisions, benchmarks,
 Limitations, Hardening before production) is written in WP 9.
@@ -169,7 +169,7 @@ They are a reproducible baseline for this project, not production capacity figur
 | WP 5 step 5.4 Idempotent consumer | Done. A Kafka consumer writes one notification per event (Flyway V2 `notifications`), deduplicating on `processed_events` in the same database transaction, with the offset committed after the DB commit. Poison and exhausted-retry records go to a dead-letter topic (`wallet.transaction-completed.v1-dlt`). A broker outage at start-up does not stop the app. 155 tests, 0 failures with `mvn verify`; the `concurrency` tag has 20 tests, 3 of 3 green. CI run: #33 green, 1m49s |
 | WP 5 step 5.5 Failure proof | Done. Tests for the consumer lifecycle (stubbed registry) and for the whole chain against a hung broker (money endpoints unaffected, everything drains after the unpause with no restart). The `concurrency` tag passed 10 of 10 runs with zero ordering violations and `mvn verify` 3 of 3. A Docker chaos run (SIGKILL and SIGTERM mid-drain, broker paused, broker stopped, topic deleted, forced duplicates) ended with ledger entries = outbox events = notifications and no duplicate notification. 159 tests, 0 failures with `mvn verify`. CI run: #35 green, 2m2s |
 | WP 5 step 5.6 M4 gate | GO on G1 to G5. `NotificationConsumerLifecycle.stop()` no longer throws when the registry fails (test L4, failing first on the old code). Fresh-clone `mvn verify` green and Compose smoke green. 160 tests, 0 failures. CI run: #37 green, 1m56s |
-| WP 6 step 6.1 Token bucket | Dead code branch removed from the idempotency claim (the lock-timeout 409 path stays). Redis starter added with the Redis health indicator and repository scanning off. Lua token bucket and fail-open `RateLimiter`; atomicity proven against a real Redis (exactly the capacity allowed in 5 of 5 runs for each tested combination). 172 tests, 6 contexts. CI run: #39 green, 2m16s |
+| WP 6 step 6.1 Token bucket | Dead code branch removed from the idempotency claim (the lock-timeout 409 path stays). Redis starter added with the Redis health indicator and repository scanning off. Lua token bucket and fail-open `RateLimiter`; atomicity proven against a real Redis (the allowed count equals min(capacity, callers) in every tested combination (1/32, 10/50, 100/64, 100/200), 5 of 5 runs each: exactly the capacity when callers outnumber tokens, and all callers when they do not). 172 tests, 6 contexts. CI run: #39 green, 2m16s |
 | WP 6 step 6.2 Wiring | Validated `app.ratelimit.*` properties, flag-gated limiter, filter after bearer authentication, 429 `ProblemDetail` with `Retry-After`, Redis in Compose, a seventh Spring context with its own Redis. 190 tests. CI run: #40 green, 2m18s |
 | WP 6 step 6.3 Failure behaviour | One WARN per outage window and one INFO on recovery, explicit reconnect back-off, 429 content type aligned with the advice. Paused, stopped and restarted Redis: money endpoints keep returning 201, health stays UP, limiting resumes without restarting the app. 204 tests, 7 contexts. CI run: #41 green, 2m22s |
 | WP 6 step 6.4 Docker proof | No repository change. Burst, Redis paused and stopped under load, app start-up with Redis absent and a Redis restart on the Compose stack; ledger reconciled and ledger = outbox = notifications after every scenario. Not a benchmark |
@@ -227,7 +227,33 @@ Hardening before production (short list): replication factor 3 with `min.insync.
 
 ### Design decisions
 
-Pending: the author's own words (to be added). Questions: why an outbox table instead of publishing inside the money transaction; why one event per ledger entry, keyed by account id; what happens on a crash after the broker ack but before the mark, and why that is acceptable; why the consumer writes the marker and the notification in one transaction and commits the offset afterwards; why a polling relay rather than Debezium, and what polling costs; why the relay stops at the first failed row and when that hurts; why a notification is a stored row.
+#### 1. Why an outbox table instead of publishing to Kafka inside the money transaction?
+
+Postgres and Kafka cannot commit together, so publishing and saving are two separate writes (a "dual write"), and either order can fail. If the app publishes first and the database then rolls back, the notification service announces a transfer that never happened: both people are told money moved while their balances did not change. If the database commits first and the publish then fails, the balances change but nobody is told, and nothing records that an event was owed, so the account holder may never notice the debit. The outbox row is written in the same database transaction as the money, so both exist or neither does. A separate relay then publishes the rows that exist, and retries until the broker acknowledges.
+
+#### 2. Why one event per ledger entry, keyed by account id?
+
+A transfer changes two accounts, so it writes two ledger entries (a debit and a credit), and each entry gets its own event. There is one topic, `wallet.transaction-completed.v1`, with 3 partitions. The Kafka key decides the partition and Kafka only guarantees order inside one partition, so keying by account id keeps each account's events in the order they happened. Events for different accounts can land on different partitions, so there is no ordering guarantee between accounts, and none is needed.
+
+#### 3. What happens if the app crashes after Kafka acknowledges but before the row is marked published?
+
+The row is still unpublished, so the relay sends it again and the topic ends up holding the same event twice. Kafka's idempotent producer setting does not prevent this: it only removes duplicates caused by retries inside one running producer, and a restarted app gets a new producer identity, so the broker stores the record again. This is acceptable only because the consumer ignores events it has already handled: it records each event id (the outbox row id) in `processed_events`, together with its consumer group. In the chaos run a graceful stop interrupted the relay mid-send and event 4142 appeared twice on the topic, and still produced exactly one notification. A `kill -9` did not produce a duplicate in the one run I made, so that case is reasoned, not observed.
+
+#### 4. Why one transaction for the marker and the notification, and the offset committed afterwards?
+
+If the marker and the notification were written separately, a crash between them could leave an event marked as done with no notification, or a notification with no marker. One transaction makes it all or nothing. The event id is assigned once, when the outbox row is created inside the money transaction, and the relay always resends that same row, so every copy carries the same id. The marker is inserted with `ON CONFLICT DO NOTHING`, so a second insert of the same id inserts nothing and the event is skipped. The offset (Kafka's bookmark of how far the consumer has read) is committed only after the database commit. A crash before the commit means Kafka redelivers and nothing was lost. A crash after the commit but before the offset also means redelivery, but the marker already exists, so the second handling does nothing. I reasoned about that second crash point but did not test a kill between those two moments.
+
+#### 5. Why a polling relay rather than Debezium, and what does polling cost?
+
+The relay is a background thread inside the app. On a 500 ms interval it queries `outbox_events` for rows where `published_at` is empty, sends them to Kafka in order, waits for the broker's acknowledgement, and only then sets `published_at`. Debezium would instead read Postgres's change log and push changes out, with no polling, but it needs Kafka Connect and extra infrastructure, which I judged out of scope for a solo, zero-budget project, so I did not build it. Polling costs up to one interval of added delay, a small constant query load on the database even when nothing is happening, and in this design it is limited to one relay instance because rows are not claimed.
+
+#### 6. Why does the relay stop at the first failed row, and when would that hurt?
+
+If the relay skipped a failed row and sent later ones, an account's events could arrive out of order, for example a withdrawal before the deposit that funded it. Stopping at the first failure keeps the order. The cost is head-of-line blocking: one row that can never be sent holds back every row behind it, for all accounts. A permanently bad payload would cause that, and there is no quarantine for such rows yet, which is listed as a limitation.
+
+#### 7. Why is the notification a stored row and not an email or a push message?
+
+The point of this part of the project is reliable, deduplicated processing, and a table row can be proven with a SQL count: one notification per ledger entry. An email or push needs an external provider and credentials, cannot be rolled back with the transaction, and cannot be counted exactly in a test. A row is also free and uses only synthetic data.
 
 What the failure testing proved: with a hung, stopped or deleted broker the money endpoints kept returning 201 and health stayed UP; after the broker returned, every outbox row was published and every event produced exactly one notification without restarting the app; forced and shutdown-induced duplicates on the topic produced no duplicate notification. What it did not prove: that a `kill -9` produces a duplicate (the one kill did not), replay of records lost with a deleted topic, a long outage, several consumers or relays, other crash points on the consumer side, or any throughput figure. The chaos run is a correctness check, not a benchmark.
 
@@ -273,7 +299,7 @@ Properties: `app.ratelimit.enabled`, `.auth|money|default.capacity`, `.auth|mone
 
 ### Evidence
 
-Tests: 204 with `mvn verify`, 0 failures, 7 Spring contexts (the limiter-on context has its own Redis container that the tests pause, stop and restart). CI #41 green, 2m22s.
+Tests: 204 with `mvn verify`, 0 failures, 7 Spring contexts (the limiter-on context has its own Redis container that the tests pause, stop and restart). CI #43 green, 2m28s.
 
 - **Atomicity (no Spring):** parallel callers against one bucket with negligible refill: capacity 1 with 32 callers, 10 with 50, and 100 with 200 each allowed exactly the capacity in 5 of 5 runs; three keys at once gave exactly 10 each. With 64 callers against capacity 100 all 64 were allowed.
 - **HTTP:** exactly 5 deposits then 429 for capacity 5, and the denied request wrote no ledger, outbox or idempotency rows; users are isolated; reads use a separate bucket; login is limited per client IP; health is never limited; the 429 body has the same fields and content type as an advice body.
@@ -304,12 +330,22 @@ Trusted-proxy handling for the client IP; Redis replication or a managed Redis; 
 
 ### Design decisions (limiter)
 
-Pending: the author's own words (to be added). Questions:
+#### 8. Why a token bucket rather than a fixed window?
 
-- Q8: Why a token bucket rather than a fixed window?
-- Q9: Why a Lua script in Redis rather than reading and writing the count from Java?
-- Q10: Why use Redis's `TIME` inside the script rather than the application's clock?
-- Q11: Why fail open when Redis is down, and what does it cost? What would fail closed cost?
-- Q12: Why key money endpoints by user id but login by IP?
+A token bucket allows a short burst up to its capacity while enforcing an average rate through its refill. A fixed window can let a client send two full windows' worth of requests around the boundary between two windows. A sliding window avoids that but keeps more state per client. The price of the token bucket is two numbers to tune (capacity and refill rate), and the defaults here are starting values, not measured optima.
 
-Also pending, for the WP 6 gate: the answers to the WP 5 questions (see Design decisions above).
+#### 9. Why a Lua script in Redis rather than reading and writing the count from Java?
+
+Reading the token count, deciding, and writing it back from Java is three steps, and two concurrent requests can both read the same count and both be allowed. Redis runs a Lua script as one uninterrupted unit, so the check and the update happen atomically in a single round trip. The test sends 32 to 200 parallel calls at a bucket of capacity C. The number allowed equals the smaller of C and the number of callers: exactly C when there are more callers than tokens, and all of them when there are fewer. No call is ever wrongly allowed or denied. The cost is that the logic lives in a second language that is harder to debug.
+
+#### 10. Why Redis's own clock (`TIME`) inside the script rather than the application's clock?
+
+Redis is the one clock shared by every application instance, so refills stay consistent even if app servers' clocks differ. The cost is that tests cannot fake the time, so the burst tests use a bucket that effectively never refills, and the refill test uses a bounded wait instead of a sleep.
+
+#### 11. Why fail open when Redis is down, and what does it cost?
+
+If Redis errors or times out, the limiter allows the request (with a 100 ms command timeout and no retry), so the money endpoints keep working. I tested a paused and a stopped Redis: deposits kept returning 201 and health stayed UP. After the Redis was unpaused or restarted, limiting resumed without restarting the app. The cost is that nothing is throttled during an outage, including login attempts. Failing closed would protect the database and the login endpoint, but a Redis outage would then take the whole wallet down. I chose availability for a wallet and wrote the cost down as a limitation.
+
+#### 12. Why key money endpoints by user id but login by IP address?
+
+A money request has a signed-in user, so the limit follows the account holder whichever address they come from. Login has no user yet, so the only available identity is the client IP. Limiting everything by IP would be unfair to users behind a shared address. The IP rule has a known weakness: the app does not trust `X-Forwarded-For`, and under Docker Desktop every local client appears as one IP and shares one login bucket.
