@@ -47,6 +47,12 @@ spring:
         delivery.timeout.ms: 10000   # must be >= request.timeout.ms + linger.ms
         linger.ms: 0
 
+logging:
+  level:
+    # Hibernate logs the Postgres error detail at WARN, e.g. "Key (email)=(...) already exists" (PII).
+    # Our ApiExceptionHandler still logs unexpected 500s. Quoted: unquoted OFF can be read as boolean false.
+    org.hibernate.orm.jdbc.error: "OFF"
+
 management:
   health:
     redis:
