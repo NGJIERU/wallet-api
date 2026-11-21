@@ -1,6 +1,8 @@
 package com.wallet.outbox;
 
+import com.wallet.metrics.EventMetrics;
 import org.slf4j.Logger;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -33,6 +35,13 @@ public class OutboxRelay {
     private volatile boolean retryPending;
     private long failingRowId = -1;
     private int consecutiveFailures;
+    private volatile EventMetrics metrics;
+
+    /** Optional: null means no counting. A setter, so the constructors that tests call stay unchanged. */
+    @Autowired(required = false)
+    public void setMetrics(EventMetrics metrics) {
+        this.metrics = metrics;
+    }
 
     public OutboxRelay(JdbcClient jdbc, OutboxSender sender,
                        @Value("${app.outbox.relay.batch-size:100}") int batchSize) {
@@ -80,6 +89,10 @@ public class OutboxRelay {
                 return failed(rows.size(), published, row, e);
             }
             published++;
+            EventMetrics m = metrics;
+            if (m != null) {
+                m.relayPublished();
+            }
         }
         failingRowId = -1;
         consecutiveFailures = 0;
@@ -88,6 +101,10 @@ public class OutboxRelay {
 
     private BatchResult failed(int selected, int published, Row row, Throwable e) {
         retryPending = true;
+        EventMetrics m = metrics;
+        if (m != null) {
+            m.relayFailed();
+        }
         long id = row == null ? -1 : row.id();
         consecutiveFailures = (id == failingRowId) ? consecutiveFailures + 1 : 1;
         failingRowId = id;

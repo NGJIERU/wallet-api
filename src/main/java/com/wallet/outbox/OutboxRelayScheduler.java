@@ -1,6 +1,8 @@
 package com.wallet.outbox;
 
+import com.wallet.metrics.EventMetrics;
 import org.slf4j.Logger;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -27,6 +29,13 @@ public class OutboxRelayScheduler implements SmartLifecycle {
     private final int batchSize;
     private volatile Thread thread;
     private volatile boolean running;
+    private volatile EventMetrics metrics;
+
+    /** Optional: null means no counting. The constructor stays unchanged (tests call it). */
+    @Autowired(required = false)
+    public void setMetrics(EventMetrics metrics) {
+        this.metrics = metrics;
+    }
 
     public OutboxRelayScheduler(OutboxRelay relay,
                                 @Value("${app.outbox.relay.poll-interval:500ms}") Duration pollInterval,
@@ -74,6 +83,10 @@ public class OutboxRelayScheduler implements SmartLifecycle {
                     wait = step(backoff, next);
                 } catch (RuntimeException e) {
                     log.warn("outbox relay step threw: {}", e.toString());
+                    EventMetrics m = metrics;
+                    if (m != null) {
+                        m.relayFailed();
+                    }
                     next[0] = backoffMin;
                     wait = backoffMin;
                 }

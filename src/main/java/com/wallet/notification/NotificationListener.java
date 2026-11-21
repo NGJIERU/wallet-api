@@ -2,6 +2,8 @@ package com.wallet.notification;
 
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.header.Header;
+import com.wallet.metrics.EventMetrics;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 
@@ -21,6 +23,14 @@ public class NotificationListener {
         this.handler = handler;
     }
 
+    private volatile EventMetrics metrics;
+
+    /** Optional: null means no counting. Counted after the handler's transaction has committed. */
+    @Autowired(required = false)
+    public void setMetrics(EventMetrics metrics) {
+        this.metrics = metrics;
+    }
+
     public static final String LISTENER_ID = "notification-listener";
 
     // autoStartup=false on purpose: the container is started by NotificationConsumerLifecycle on its own thread,
@@ -31,7 +41,16 @@ public class NotificationListener {
             containerFactory = "notificationListenerContainerFactory",
             autoStartup = "false")
     public void onMessage(ConsumerRecord<String, String> record) {
-        handler.handle(header(record, "event-id"), header(record, "event-type"), record.value());
+        NotificationHandler.Result result =
+                handler.handle(header(record, "event-id"), header(record, "event-type"), record.value());
+        EventMetrics m = metrics;
+        if (m != null) {
+            m.consumerEvent(switch (result) {
+                case CREATED -> "processed";
+                case DUPLICATE -> "duplicate";
+                case SKIPPED_UNKNOWN_TYPE -> "skipped";
+            });
+        }
     }
 
     static String header(ConsumerRecord<?, ?> record, String name) {
