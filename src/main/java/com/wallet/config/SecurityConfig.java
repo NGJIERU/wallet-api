@@ -21,6 +21,7 @@ import org.springframework.security.oauth2.server.resource.web.authentication.Be
 import com.wallet.ratelimit.RateLimitFilter;
 import com.wallet.ratelimit.RateLimitProperties;
 import com.wallet.ratelimit.RateLimiter;
+import com.wallet.web.UserIdMdcFilter;
 
 import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
@@ -41,6 +42,8 @@ public class SecurityConfig {
                         .requestMatchers("/auth/**", "/actuator/health/**", "/error").permitAll()
                         .anyRequest().authenticated())
                 .oauth2ResourceServer(oauth -> oauth.jwt(Customizer.withDefaults()));
+        // Deliberately NOT a bean (see UserIdMdcFilter). Added first, so the limiter's 429 line also has the user id.
+        http.addFilterAfter(new UserIdMdcFilter(), BearerTokenAuthenticationFilter.class);
         RateLimiter limiter = rateLimiter.getIfAvailable();
         RateLimitProperties limits = rateLimitProperties.getIfAvailable();
         if (limiter != null && limits != null) {
