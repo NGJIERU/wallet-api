@@ -323,6 +323,7 @@ Tests: 204 with `mvn verify`, 0 failures, 7 Spring contexts (the limiter-on cont
 | Defaults are not tuned | The numbers are starting points | No load data yet | Tune after the WP 8 load tests |
 | Redis idempotency fast path not built (chosen, not a defect) | Replays always go to Postgres | Postgres inside the money transaction is the single source of truth for idempotency; a Redis fast path would add a second source of truth and a new failure mode on the money path, for a latency benefit nothing here needs | Only if replay latency is measured to matter, with Redis as a hint and Postgres as the authority |
 | Tests: single local runs | Recovery times and latencies are not benchmarks | By design | A proper load test |
+| Hibernate JDBC error logging is disabled (logger `org.hibernate.orm.jdbc.error` set to OFF) | The diagnostic lines for unexpected database errors from that logger are lost. Residual: the `PSQLException` message in a stack trace on an unexpected 500 can still carry the same `Detail:` text (for example a key value such as an email), so the logs are not claimed clean; the leak checks cover only the tested paths | Postgres error detail can contain key values such as emails, and Hibernate logged it at WARN on an ordinary duplicate registration. Our own `ApiExceptionHandler` still logs the exception and stack trace on unexpected 500s, so diagnosis is not lost | A log filter that keeps the SQLSTATE and constraint name and drops the `Detail:` text |
 
 ### Hardening before production (rate limiter)
 
