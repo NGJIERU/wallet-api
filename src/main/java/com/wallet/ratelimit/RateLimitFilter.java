@@ -1,5 +1,6 @@
 package com.wallet.ratelimit;
 
+import com.wallet.metrics.LimiterMetrics;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -39,10 +40,17 @@ public class RateLimitFilter extends OncePerRequestFilter {
 
     private final RateLimiter limiter;
     private final RateLimitProperties props;
+    private final LimiterMetrics metrics;
 
     public RateLimitFilter(RateLimiter limiter, RateLimitProperties props) {
+        this(limiter, props, null);
+    }
+
+    /** metrics may be null (no counting). */
+    public RateLimitFilter(RateLimiter limiter, RateLimitProperties props, LimiterMetrics metrics) {
         this.limiter = limiter;
         this.props = props;
+        this.metrics = metrics;
     }
 
     @Override
@@ -55,6 +63,9 @@ public class RateLimitFilter extends OncePerRequestFilter {
         }
         RateLimitDecision d = limiter.tryAcquire("rl:" + target.scope() + ":" + target.id(),
                 target.config().capacity(), target.config().refillPerSecond());
+        if (metrics != null) {
+            metrics.record(target.scope(), d.degraded() ? "degraded" : d.allowed() ? "allowed" : "denied");
+        }
         if (d.allowed()) {
             if (!d.degraded()) {
                 response.setHeader("X-RateLimit-Remaining", Long.toString(d.remaining()));

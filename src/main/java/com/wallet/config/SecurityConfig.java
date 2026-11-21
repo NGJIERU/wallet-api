@@ -20,6 +20,7 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter;
 import com.wallet.ratelimit.RateLimitFilter;
 import com.wallet.ratelimit.RateLimitProperties;
+import com.wallet.metrics.LimiterMetrics;
 import com.wallet.ratelimit.RateLimiter;
 import com.wallet.web.UserIdMdcFilter;
 
@@ -34,7 +35,8 @@ public class SecurityConfig {
 
     @Bean
     SecurityFilterChain filterChain(HttpSecurity http, ObjectProvider<RateLimiter> rateLimiter,
-                                    ObjectProvider<RateLimitProperties> rateLimitProperties) throws Exception {
+                                    ObjectProvider<RateLimitProperties> rateLimitProperties,
+                                    ObjectProvider<LimiterMetrics> limiterMetrics) throws Exception {
         http
                 .csrf(csrf -> csrf.disable())
                 .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
@@ -48,7 +50,7 @@ public class SecurityConfig {
         RateLimitProperties limits = rateLimitProperties.getIfAvailable();
         if (limiter != null && limits != null) {
             // Deliberately NOT a bean: a Filter bean is also registered in the servlet container and would run twice.
-            http.addFilterAfter(new RateLimitFilter(limiter, limits), BearerTokenAuthenticationFilter.class);
+            http.addFilterAfter(new RateLimitFilter(limiter, limits, limiterMetrics.getIfAvailable()), BearerTokenAuthenticationFilter.class);
         }
         return http.build();
     }
