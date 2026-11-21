@@ -62,6 +62,8 @@ services:
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       SPRING_DATA_REDIS_HOST: redis
       APP_RATELIMIT_ENABLED: "true"
+      # JSON logs in Compose only; plain text locally and in tests
+      LOGGING_STRUCTURED_FORMAT_CONSOLE: logstash
     ports:
       - "8081:8080"
     depends_on:
