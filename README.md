@@ -5,7 +5,9 @@
 >
 > **WP 5 status:** outbox, relay, consumer and dead-letter topic designed and implemented; M4 gate: GO (9 Nov 2026). 160 tests, 0 failures with `mvn verify`; 6 Spring contexts; CI run #37 green, 1m56s (code commit `42e1e65`); CI run #38 green, 2m11s (docs commit `bc6499c`, tagged `m4-gate`). No throughput figures were measured.
 >
-> **WP 6 status:** Redis rate limiter (Lua token bucket, fail-open) designed and implemented; steps 6.0 to 6.4 done, gate decision pending. 204 tests, 0 failures with `mvn verify`; 7 Spring contexts; CI run #43 green, 2m28s (run #42, a docs-only commit, failed on a test-isolation defect in an existing test; fixed in `8a901c7`). No throughput figures were measured.
+> **WP 6 status:** Redis rate limiter (Lua token bucket, fail-open) designed and implemented; steps 6.0 to 6.4 done, gate: GO (R1 to R5 on 15 Nov 2026, R6 closed by the design-decision answers; tag `wp6-gate`). 204 tests, 0 failures with `mvn verify`; 7 Spring contexts; CI run #43 green, 2m28s (run #42, a docs-only commit, failed on a test-isolation defect in an existing test; fixed in `8a901c7`). No throughput figures were measured.
+>
+> **WP 7 status:** observability implemented (request id and completion line, JSON logs in Compose, six `wallet.*` meters, authenticated `/actuator/metrics`); steps 7.0 to 7.3 done, gate decision pending the final CI run. 231 tests, 0 failures with `mvn verify`; 7 Spring contexts; CI run #49 green, 2m9s (code commit `3638f4b`). Docker proof on the real stack, not a benchmark; no throughput figures were measured.
 
 Work in progress. The full README (architecture diagram, design decisions, benchmarks,
 Limitations, Hardening before production) is written in WP 9.
@@ -174,6 +176,7 @@ They are a reproducible baseline for this project, not production capacity figur
 | WP 6 step 6.3 Failure behaviour | One WARN per outage window and one INFO on recovery, explicit reconnect back-off, 429 content type aligned with the advice. Paused, stopped and restarted Redis: money endpoints keep returning 201, health stays UP, limiting resumes without restarting the app. 204 tests, 7 contexts. CI run: #41 green, 2m22s |
 | WP 6 step 6.4 Docker proof | No repository change. Burst, Redis paused and stopped under load, app start-up with Redis absent and a Redis restart on the Compose stack; ledger reconciled and ledger = outbox = notifications after every scenario. Not a benchmark |
 | WP 6 CI incident (test isolation) | CI run #42 failed in `NotificationFullChainTest` (an extra notification, ledger entry 5, for account 6). Cause: `NotificationListenerTest` hard-coded account id 6 and ledger entry id 5 and wrote that row into the shared test database, so it appeared in another test's results whenever that test's wallet received account id 6, which depends on test class execution order. Not an application defect. Fixed in `8a901c7` (random ids from a range sequences never reach; no assertion changed); reproduced locally with `-Dsurefire.runOrder=reversealphabetical` before the fix and passing after. CI run #43 green, 2m28s. Why #41 passed: surefire's default filesystem class order differed per commit. In #42 and its re-run NotificationListenerTest ran at position 2, before NotificationFullChainTest at position 5. In #41 and #43 it ran after (27 vs 25, 43 vs 41). The order is stable per commit, so the re-run failed identically. Why the order changes between commits is inferred, not verified. |
+| WP 7 Observability | Request id and one completion line per request, JSON logs in Compose, six `wallet.*` meters (outbox gauges, relay, consumer and limiter counters) and an authenticated `/actuator/metrics`. A leak found by a test (Hibernate logged a duplicate email) was fixed by switching that logger off. 231 tests, 7 contexts. CI run: #49 green, 2m9s |
 
 ## Outbox, relay and consumer (WP 5)
 
@@ -350,3 +353,79 @@ If Redis errors or times out, the limiter allows the request (with a 100 ms comm
 #### 12. Why key money endpoints by user id but login by IP address?
 
 A money request has a signed-in user, so the limit follows the account holder whichever address they come from. Login has no user yet, so the only available identity is the client IP. Limiting everything by IP would be unfair to users behind a shared address. The IP rule has a known weakness: the app does not trust `X-Forwarded-For`, and under Docker Desktop every local client appears as one IP and shares one login bucket.
+
+#### 13. Why a request id and one completion line per request?
+
+When something goes wrong, the first question is "what happened to this request?". Every response carries an `X-Request-Id`, and every request except health probes writes exactly one completion line with the method, path, status, duration, request id and, when the caller is signed in, the user id. That makes a request traceable even when it was rejected with a 401 or a 429. A client may send its own id, but it is accepted only if it matches a strict whitelist; otherwise the server generates one, so a client cannot inject extra lines into the log. In a run of 411 requests there were 411 distinct completion ids, none missing and none duplicated.
+
+#### 14. Why only `outcome` and `scope` as metric tags, and never a user id?
+
+Every distinct tag value creates a separate time series, so a user or account id as a tag would create an unbounded number of series and make the metrics heavier as the user base grows. The meters answer questions about the system (is the outbox draining, are duplicates or bad events occurring, is the limiter degraded). Per-user detail belongs in the logs, which already carry the user id. A test lists every `wallet.*` meter and fails if any tag key other than `outcome` or `scope` appears.
+
+#### 15. Why measure outbox lag with a count and an oldest-age gauge?
+
+"Is the outbox draining?" decides whether events are being delivered at all. The unpublished count shows the size of the backlog, and the oldest-age gauge shows how long the worst event has been waiting. In the run where the broker was paused for 25 seconds, deposits kept returning 201 while the unpublished count rose from 12 to 47 and the oldest age from 6 to 24 seconds. After the broker returned, both went back to 0. The count query grows with the backlog during a long outage, which is acceptable behind a 5-second cache for this project.
+
+#### 16. Why are the gauges cached for 5 seconds, and why do they report NaN on a database error?
+
+The gauges read the database, so computing them on every metrics request could add load to Postgres exactly when it is struggling. A 5-second cache bounds that cost. If the read fails, the gauge reports NaN instead of throwing or logging on every call, so a metrics problem can never break the application or flood the log. The price is that the gauges can lag by about the cache interval; about 6 seconds of lag was seen in the outage run.
+
+#### 17. Why is the metrics endpoint authenticated, but on the main port?
+
+Operational numbers should not be public, so `/actuator/metrics` requires a token and only health is open. A separate management port would be cleaner, but it would move the health URL that the quickstart and the Compose healthchecks use, which was too invasive for this package. The cost is that any signed-in user can read the metrics, and reading them uses up that user's rate-limit allowance. This is listed as a limitation.
+
+#### 18. Why is Hibernate's JDBC error logging switched off?
+
+A test written to check that the logs contain no sensitive data found a real leak: registering an email that already exists made Hibernate log Postgres's detail line, which contains the email address. The application already returns a clean 409, so I switched that one logger off. The cost is losing Hibernate's own SQL-error log lines. Unexpected 500 errors are still logged with a stack trace by our own error handler, and that stack trace can still contain database error text, so the residual risk is a documented limitation rather than something I claim to have removed.
+
+## Observability (WP 7)
+
+What an operator can answer from the logs and metrics without a debugger. Descriptive; the reasoning is in decisions 13 to 18.
+
+### What is logged
+
+- **Request id:** every response carries `X-Request-Id`, including 401 and 429 responses. A client-supplied id is used only if it matches `[A-Za-z0-9._-]{1,64}`; otherwise a UUID is generated and the supplied value is never logged or echoed.
+- **Completion line:** every request except `/actuator/health/**` writes one INFO line: `request completed method=... path=... status=... durationMs=... requestId=...` and `userId=...` when the caller is authenticated. The path is the matched pattern when a handler matched, otherwise the raw path without the query string (so the 429 line from the limiter shows the raw path, including an account id). No bodies, headers, query strings, tokens or `Idempotency-Key` values are logged.
+- **Format:** JSON in Compose (`LOGGING_STRUCTURED_FORMAT_CONSOLE=logstash`, with `requestId` and `userId` as top-level fields); plain text locally and in tests, where the request id appears only on the completion line.
+
+### Meters (`GET /actuator/metrics`, authenticated)
+
+| Meter | Type | Tags | Question it answers |
+|---|---|---|---|
+| `wallet.outbox.unpublished` | gauge | none | Is the outbox draining? (backlog size) |
+| `wallet.outbox.oldest.age.seconds` | gauge | none | Is the outbox draining? (how long the oldest event has waited) |
+| `wallet.relay.published` | counter | none | How many outbox rows were marked published? |
+| `wallet.relay.failed` | counter | none | How often did the relay fail? |
+| `wallet.consumer.events` | counter | `outcome`: processed, duplicate, dead_lettered, skipped | Are duplicates or bad events occurring? |
+| `wallet.ratelimit.decisions` | counter | `scope`: auth, money, default; `outcome`: allowed, denied, degraded | Is the limiter healthy? |
+
+Money outcomes (201, 409, 422, 429) come from Spring's `http.server.requests`. Reading a meter:
+
+```bash
+TOKEN=$(curl -s -X POST http://localhost:8081/auth/login -H "Content-Type: application/json" \
+  -d '{"email":"alice@example.com","password":"password123"}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["accessToken"])')
+curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8081/actuator/metrics/wallet.outbox.unpublished
+curl -s -H "Authorization: Bearer $TOKEN" "http://localhost:8081/actuator/metrics/wallet.ratelimit.decisions?tag=scope:money&tag=outcome:denied"
+```
+
+Evidence (single local runs, not benchmarks): the meters agreed with the database and with the client's own counts per scope in a 411-request run; during a 25-second Kafka pause the unpublished count rose from 12 to 47 and the oldest age from 6 to 24 seconds, then returned to 0; a 1-second Redis pause raised `degraded` by 10 with health UP.
+
+### Limitations (WP 7)
+
+| Limitation | Impact | Why accepted | Fix before production |
+|---|---|---|---|
+| Any authenticated user can read `/actuator/metrics` | Operational numbers are visible to every signed-in user | Moving management to another port would move the health URL used by the quickstart and the healthchecks | Separate management port or network |
+| Metrics reads consume the reader's `default` rate-limit bucket | A scraper counts against its own allowance | Same cause as above | Separate management port or network |
+| The unpublished-count query grows with the backlog | During a long outage the query gets slower | Behind a 5-second cache; acceptable here | A cheaper estimate, or alert on the oldest age |
+| Gauges lag by about 5 seconds | A change shows up late (about 6 seconds seen) | The cache protects Postgres | None needed |
+| Plain-text local logs carry the request id only on the completion line | Other local lines cannot be matched by id | JSON in Compose carries it on every line; changing the pattern is dev convenience only | Add the id to the plain-text pattern if wanted |
+| A client-supplied request id is whitelisted but spoofable | A client can pick its own id, within the whitelist | The whitelist prevents log injection | Always generate the id at the edge |
+| Unexpected-500 stack traces may carry database error text | Key values such as an email could appear in a log | Our handler logs the trace for diagnosis; no 500 occurred in the Docker run | A sanitising log filter |
+| Hibernate JDBC error logging is off (logger `org.hibernate.orm.jdbc.error`) | Hibernate's own SQL-error lines are lost | It logged the email on a duplicate registration | See the log filter above |
+| 429 responses appear under `uri=UNKNOWN` in `http.server.requests` | Money and auth 429s are separable only through `wallet.ratelimit.decisions` | The limiter rejects before a handler matches | Tag the 429 in the filter, if needed |
+| Timings and values are single local runs | Not benchmarks | By design | WP 8 load test |
+| No sustained-load run yet | Metric values under sustained load are unknown | Planned for WP 8 | k6 run |
+
+### Hardening before production (observability)
+
+A separate management port or network for metrics; a sanitising log filter that keeps the SQLSTATE and constraint name and drops the `Detail:` text; trusted-proxy handling for the client IP and for request ids.
