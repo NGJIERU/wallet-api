@@ -426,6 +426,10 @@ Evidence (single local runs, not benchmarks): the meters agreed with the databas
 | Timings and values are single local runs | Not benchmarks | By design | WP 8 load test |
 | No sustained-load run yet | Metric values under sustained load are unknown | Planned for WP 8 | k6 run |
 
+### Re-running the checks
+
+`docs/chain-audit.sql` holds the read-only audit queries (reconciliation, ledger = outbox = notifications = processed events, unpublished, duplicate notifications). Run: `docker compose exec -T postgres psql -U wallet -d wallet -f - < docs/chain-audit.sql`.
+
 ### Hardening before production (observability)
 
 A separate management port or network for metrics; a sanitising log filter that keeps the SQLSTATE and constraint name and drops the `Detail:` text; trusted-proxy handling for the client IP and for request ids.
